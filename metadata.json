@@ -1,0 +1,6 @@
+{
+  "name": "WatchTogether",
+  "description": "Ultra-low-latency real-time synchronized video watch party platform with video URL/upload support, schedule countdown, and adaptive quality.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
