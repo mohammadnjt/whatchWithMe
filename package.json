@@ -1,15 +1,26 @@
 {
   "name": "watchtogether",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "main": "dist/server.js",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
-    "start": "node server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
+    "start": "node dist/server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
+  },
+  "orchestrator": {
+    "id": "watchtogether",
+    "name": "WatchTogether",
+    "type": "backend",
+    "entry": "dist/server.js",
+    "build": "npm run build",
+    "start": "node dist/server.js",
+    "autoStart": true,
+    "stopTimeout": 10
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

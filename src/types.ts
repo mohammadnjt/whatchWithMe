@@ -14,15 +14,55 @@ export interface MovieInfo {
   qualities?: MovieQuality[];
 }
 
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  role: 'admin' | 'user';
+  status: 'pending' | 'approved' | 'rejected';
+  avatar: string;
+  color: string;
+  createdAt?: number;
+  approvedAt?: number;
+}
+
+export interface StorageFileItem {
+  id: string;
+  filename: string;
+  originalName: string;
+  size: number;
+  formattedSize: string;
+  mimeType: string;
+  uploadedAt: number;
+  uploadedBy?: string;
+  expiresAt: number | null;
+  timeLeftMs: number | null;
+  formattedTimeLeft: string;
+  url: string;
+  isCurrentlyPlaying: boolean;
+}
+
+export interface StorageStats {
+  files: StorageFileItem[];
+  totalBytes: number;
+  formattedTotalSize: string;
+  totalFiles: number;
+  retentionHours: number;
+  maxStorageBytes: number;
+}
+
 export interface Participant {
   id: string;
   name: string;
   avatar: string;
   color: string;
   quality: string;
+  role?: 'admin' | 'user';
   isHost?: boolean;
   online: boolean;
   ping: number;
+  isMicOn?: boolean;
+  isSpeaking?: boolean;
 }
 
 export interface ChatMessage {
@@ -38,7 +78,7 @@ export interface ChatMessage {
 export interface RoomState {
   id: string;
   name: string;
-  movie: MovieInfo;
+  movie?: MovieInfo | null;
   scheduledTime: string | null;
   status: 'scheduled' | 'playing' | 'paused' | 'ended';
   currentTime: number;

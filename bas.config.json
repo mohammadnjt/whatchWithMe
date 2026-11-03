@@ -1,0 +1,11 @@
+{
+  "id": "watchtogether",
+  "name": "WatchTogether",
+  "type": "backend",
+  "entry": "dist/server.js",
+  "build": "npm run build",
+  "start": "node dist/server.js",
+  "autoStart": true,
+  "stopTimeout": 10,
+  "gitBranch": "main"
+}

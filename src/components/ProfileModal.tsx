@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
-import { X, User, Check } from 'lucide-react';
+import { X, User, Check, LogOut, ShieldCheck } from 'lucide-react';
 
 interface ProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentName: string;
   currentColor: string;
+  username?: string;
+  role?: 'admin' | 'user';
   onSaveProfile: (name: string, color: string) => void;
+  onLogout?: () => void;
   showToast: (text: string, variant?: string) => void;
 }
 
@@ -25,7 +28,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onClose,
   currentName,
   currentColor,
+  username,
+  role,
   onSaveProfile,
+  onLogout,
   showToast,
 }) => {
   const [name, setName] = useState(currentName);
@@ -60,6 +66,27 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs">
+          {username && (
+            <div className="p-3 rounded-xl bg-[#0c1020] border border-slate-800 flex items-center justify-between">
+              <div>
+                <span className="text-slate-400 block text-[10px]">Username</span>
+                <span className="font-mono text-slate-200 font-semibold">@{username}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                {role === 'admin' ? (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" />
+                    <span>Admin</span>
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full bg-purple-500/20 border border-purple-500/30 text-purple-300 text-[10px] font-medium">
+                    Member
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-slate-300 font-semibold mb-1.5">
               Display Name
@@ -93,14 +120,28 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             </div>
           </div>
 
-          <div className="pt-2">
+          <div className="pt-2 flex flex-col gap-2">
             <button
               type="submit"
-              className="w-full py-2.5 px-4 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30 transition-all flex items-center justify-center gap-1.5"
+              className="w-full py-2.5 px-4 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Check className="w-4 h-4" />
               <span>Save Changes</span>
             </button>
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onLogout();
+                }}
+                className="w-full py-2 px-4 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 font-medium rounded-xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>خروج از حساب کاربری (Logout)</span>
+              </button>
+            )}
           </div>
         </form>
       </div>

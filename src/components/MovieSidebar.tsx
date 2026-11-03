@@ -13,6 +13,11 @@ import {
   Film,
   Sparkles,
   Wifi,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Radio,
 } from 'lucide-react';
 import { MovieInfo, Participant, ChatMessage } from '../types';
 
@@ -24,6 +29,13 @@ interface MovieSidebarProps {
   currentUserId: string;
   selectedQuality: string;
   chatMessages: ChatMessage[];
+  isMicActive?: boolean;
+  isPushToTalkActive?: boolean;
+  isLocalSpeaking?: boolean;
+  speakingUserIds?: Set<string>;
+  locallyMutedUserIds?: Set<string>;
+  onToggleMic?: () => void;
+  onToggleMuteUser?: (userId: string, name?: string) => void;
   onQualityChange: (quality: string) => void;
   onSendMessage: (text: string) => void;
   onStartNow: () => void;
@@ -39,6 +51,13 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
   currentUserId,
   selectedQuality,
   chatMessages,
+  isMicActive = false,
+  isPushToTalkActive = false,
+  isLocalSpeaking = false,
+  speakingUserIds = new Set(),
+  locallyMutedUserIds = new Set(),
+  onToggleMic,
+  onToggleMuteUser,
   onQualityChange,
   onSendMessage,
   onStartNow,
@@ -113,11 +132,18 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
         <div className="flex gap-4">
           {/* Movie Poster */}
           <div className="w-20 sm:w-24 h-28 sm:h-32 rounded-xl overflow-hidden bg-slate-900 border border-slate-700/60 shrink-0 shadow-lg relative group">
-            <img
-              src={movie.posterUrl}
-              alt={movie.title}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-            />
+            {movie.posterUrl ? (
+              <img
+                src={movie.posterUrl}
+                alt={movie.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center bg-purple-950/30 text-purple-400 p-2 text-center">
+                <Film className="w-7 h-7 mb-1" />
+                <span className="text-[10px] leading-tight text-slate-400">بدون فیلم</span>
+              </div>
+            )}
             <button
               onClick={onOpenChangeMovie}
               title="Change Movie"
@@ -180,28 +206,101 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
         </div>
       </div>
 
-      {/* 2. Participants Section (Matching screenshot) */}
+      {/* 2. Participants & Live Voice Chat Section */}
       <div className="bg-[#12162a]/90 backdrop-blur-md border border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xl">
-        <div className="flex items-center justify-between mb-3.5">
+        {/* Header & Participant Count */}
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
             <Users className="w-4 h-4 text-purple-400" />
             <span>Participants ({participants.filter((p) => p.online).length} online)</span>
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </div>
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <span className="px-1.5 py-0.5 rounded bg-purple-600/25 border border-purple-500/30 text-purple-300 text-[10px] font-mono font-semibold" title="نگه‌داشتن کلید M برای صحبت (Push-to-Talk)">
+              کلید M = صحبت
+            </span>
+            <Radio className="w-3.5 h-3.5 text-emerald-400" />
+            <span>گفتگوی صوتی</span>
+          </div>
         </div>
 
-        <div className="space-y-2.5 max-h-[175px] overflow-y-auto pr-1 select-none scrollbar-thin">
+        {/* Live Voice Chat Bar */}
+        <div className={`mb-3.5 p-2.5 rounded-xl border transition-all flex items-center justify-between gap-2 shadow-inner ${
+          isPushToTalkActive
+            ? 'bg-emerald-950/40 border-emerald-500/60 shadow-emerald-900/30'
+            : isMicActive
+            ? 'bg-[#0e1628] border-emerald-500/30'
+            : 'bg-[#0b0e1d] border-slate-800/90'
+        }`}>
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={onToggleMic}
+              className={`p-2 rounded-xl flex items-center gap-2 text-xs font-bold transition-all cursor-pointer shadow-md ${
+                isPushToTalkActive
+                  ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400 animate-pulse'
+                  : isMicActive
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/30'
+                  : 'bg-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-700 border border-slate-700/80'
+              }`}
+              title={isMicActive ? 'میکروفون فعال است (کلیک برای قطع میکروفون)' : 'روشن کردن میکروفون یا نگه‌داشتن کلید M برای صحبت'}
+            >
+              {isMicActive ? (
+                <>
+                  <Mic className="w-4 h-4 text-emerald-400 animate-pulse" />
+                  <span className="truncate">{isPushToTalkActive ? 'کلید M فعال' : 'میکروفون روشن'}</span>
+                </>
+              ) : (
+                <>
+                  <MicOff className="w-4 h-4 text-slate-400" />
+                  <span className="truncate">میکروفون خاموش</span>
+                </>
+              )}
+            </button>
+
+            {/* Speaking Audio Wave Animation */}
+            {isMicActive && (
+              <div className="flex items-center gap-0.5 px-2">
+                <span className={`w-1 rounded-full bg-emerald-400 transition-all duration-150 ${isLocalSpeaking || isPushToTalkActive ? 'h-4 animate-bounce' : 'h-1.5'}`} />
+                <span className={`w-1 rounded-full bg-emerald-400 transition-all duration-150 delay-75 ${isLocalSpeaking || isPushToTalkActive ? 'h-6 animate-bounce' : 'h-2'}`} />
+                <span className={`w-1 rounded-full bg-emerald-400 transition-all duration-150 delay-150 ${isLocalSpeaking || isPushToTalkActive ? 'h-3 animate-bounce' : 'h-1.5'}`} />
+              </div>
+            )}
+          </div>
+
+          <div className="text-[11px] text-slate-400 text-left shrink-0">
+            {isPushToTalkActive ? (
+              <span className="text-emerald-400 font-bold animate-pulse">در حال صحبت (M)...</span>
+            ) : isMicActive ? (
+              <span className="text-emerald-400 font-medium">صدایتان پخش می‌شود</span>
+            ) : (
+              <span className="text-slate-400">کلیک یا نگه‌داشتن M</span>
+            )}
+          </div>
+        </div>
+
+        {/* Participants List */}
+        <div className="space-y-2 max-h-[190px] overflow-y-auto pr-1 select-none scrollbar-thin">
           {participants.map((p) => {
             const isMe = p.id === currentUserId || p.name.includes('(You)');
+            const isSpeaking = (speakingUserIds.has(p.id) || p.isSpeaking || (isMe && isLocalSpeaking));
+            const isMutedLocally = locallyMutedUserIds.has(p.id);
+
             return (
               <div
                 key={p.id}
-                className="flex items-center justify-between py-1 px-1 rounded-lg hover:bg-slate-800/40 transition-colors"
+                className={`flex items-center justify-between py-1.5 px-2 rounded-xl transition-all border ${
+                  isSpeaking
+                    ? 'bg-emerald-950/20 border-emerald-500/40'
+                    : 'bg-[#151930]/40 hover:bg-[#181d38]/80 border-slate-800/60'
+                }`}
               >
+                {/* Left: Avatar + Name + Speaking Ring */}
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="relative">
                     <div
-                      className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs text-white shadow"
+                      className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs text-white shadow transition-all ${
+                        isSpeaking ? 'ring-2 ring-emerald-400 ring-offset-1 ring-offset-[#12162a] animate-pulse' : ''
+                      }`}
                       style={{ backgroundColor: p.color || '#8b5cf6' }}
                     >
                       {p.avatar || p.name.slice(0, 2).toUpperCase()}
@@ -210,14 +309,46 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
                       <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#12162a]" />
                     )}
                   </div>
-                  <span className="text-xs font-medium text-slate-200 truncate max-w-[140px]">
-                    {p.name}
-                  </span>
+
+                  <div className="min-w-0 flex flex-col">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-xs font-medium truncate max-w-[110px] sm:max-w-[130px] ${isMe ? 'text-purple-300 font-bold' : 'text-slate-200'}`}>
+                        {p.name}
+                      </span>
+                      {isMe && (
+                        <span className="text-[10px] text-purple-400 font-semibold">(شما)</span>
+                      )}
+                    </div>
+                    {isSpeaking && (
+                      <span className="text-[9px] text-emerald-400 font-medium">در حال صحبت...</span>
+                    )}
+                    {isMutedLocally && !isMe && (
+                      <span className="text-[9px] text-rose-400 font-medium">توسط شما بی‌صدا شد</span>
+                    )}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                {/* Right: Mic status indicator, Quality, and Local Mute Button */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* Participant Mic Status */}
+                  <div
+                    className={`p-1 rounded-md text-[10px] ${
+                      (isMe ? isMicActive : p.isMicOn)
+                        ? 'text-emerald-400 bg-emerald-500/10'
+                        : 'text-slate-500 bg-slate-800/40'
+                    }`}
+                    title={(isMe ? isMicActive : p.isMicOn) ? 'میکروفون روشن است' : 'میکروفون خاموش است'}
+                  >
+                    {(isMe ? isMicActive : p.isMicOn) ? (
+                      <Mic className="w-3.5 h-3.5" />
+                    ) : (
+                      <MicOff className="w-3.5 h-3.5" />
+                    )}
+                  </div>
+
+                  {/* Quality Badge */}
                   <span
-                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold tracking-tight shadow-sm ${
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold tracking-tight ${
                       p.quality?.includes('1080p') || p.quality?.includes('4K')
                         ? 'bg-purple-600/30 text-purple-300 border border-purple-500/30'
                         : p.quality?.includes('720p')
@@ -227,9 +358,29 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
                   >
                     {p.quality || '1080p'}
                   </span>
-                  <button className="text-slate-500 hover:text-slate-300 transition-colors p-0.5">
-                    <MoreVertical className="w-3.5 h-3.5" />
-                  </button>
+
+                  {/* Individual Mute/Unmute Button for each other participant */}
+                  {!isMe ? (
+                    <button
+                      onClick={() => onToggleMuteUser && onToggleMuteUser(p.id, p.name)}
+                      className={`p-1.5 rounded-lg text-xs transition-all cursor-pointer border ${
+                        isMutedLocally
+                          ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                          : 'bg-slate-800/70 text-slate-400 hover:text-slate-200 hover:bg-slate-700 border-slate-700/80'
+                      }`}
+                      title={
+                        isMutedLocally
+                          ? `صدای ${p.name} برای شما قطع است (کلیک برای وصل مجدد صدا)`
+                          : `قطع صدای ${p.name} برای شما (میوت محلی)`
+                      }
+                    >
+                      {isMutedLocally ? (
+                        <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+                      ) : (
+                        <Volume2 className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             );

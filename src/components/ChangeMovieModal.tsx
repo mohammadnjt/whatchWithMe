@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Upload, Link2, Film, Check, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
+import { X, Upload, Link2, Film, Check, AlertCircle, Sparkles, Loader2, Activity } from 'lucide-react';
 import { MovieInfo } from '../types';
 
 interface ChangeMovieModalProps {
@@ -73,7 +73,44 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
+  const [isTestingUrl, setIsTestingUrl] = useState(false);
+  const [urlTestResult, setUrlTestResult] = useState<any>(null);
+
   if (!isOpen) return null;
+
+  const handleTestUrl = async () => {
+    if (!videoUrl.trim()) {
+      showToast('لطفاً ابتدا لینک ویدیو را وارد کنید.', 'warning');
+      return;
+    }
+
+    setIsTestingUrl(true);
+    setUrlTestResult(null);
+
+    try {
+      const res = await fetch('/api/check-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: videoUrl.trim() }),
+      });
+      const data = await res.json();
+      setUrlTestResult(data);
+      if (data.success) {
+        showToast('لینک فعال و قابل اتصال است.', 'success');
+      } else {
+        showToast(`هشدار سرور: ${data.message}`, 'warning');
+      }
+    } catch (err: any) {
+      setUrlTestResult({
+        success: false,
+        statusCode: 0,
+        message: `عدم برقراری تماس تستی: ${err.message}`,
+      });
+      showToast('خطا در تست اتصال به لینک.', 'warning');
+    } finally {
+      setIsTestingUrl(false);
+    }
+  };
 
   const handleUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -225,17 +262,63 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
                 <label className="block text-slate-300 font-semibold mb-1">
                   Video Direct URL (MP4, WebM, Stream) *
                 </label>
-                <input
-                  type="url"
-                  required
-                  placeholder="https://example.com/movie.mp4"
-                  value={videoUrl}
-                  onChange={(e) => setVideoUrl(e.target.value)}
-                  className="w-full bg-[#0c1020] border border-slate-700 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono text-xs"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    required
+                    placeholder="https://example.com/movie.mp4"
+                    value={videoUrl}
+                    onChange={(e) => {
+                      setVideoUrl(e.target.value);
+                      setUrlTestResult(null);
+                    }}
+                    className="flex-1 bg-[#0c1020] border border-slate-700 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestUrl}
+                    disabled={isTestingUrl || !videoUrl.trim()}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-slate-700 disabled:opacity-50 transition-colors"
+                  >
+                    <Activity className={`w-3.5 h-3.5 ${isTestingUrl ? 'animate-spin text-purple-400' : 'text-slate-400'}`} />
+                    <span>{isTestingUrl ? 'در حال بررسی...' : 'بررسی لینک'}</span>
+                  </button>
+                </div>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Supports direct video links (MP4, WebM) that all participants can load.
+                  لینک مستقیم ویدیو با فرمت‌های MP4، WebM یا MKV (با قابلیت استریم مستقیم یا پروکسی سرور)
                 </p>
+
+                {urlTestResult && (
+                  <div
+                    className={`mt-2 p-2.5 rounded-xl border text-xs flex flex-col gap-1 ${
+                      urlTestResult.success
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                        : 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-bold">
+                      <span>نتیجه بررسی زنده سرور:</span>
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/40">
+                        HTTP {urlTestResult.statusCode || 'Failed'}
+                      </span>
+                    </div>
+                    <p className="text-[11px]">{urlTestResult.message}</p>
+                    {!urlTestResult.success && videoUrl && !videoUrl.includes('/api/proxy-stream') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const proxied = `/api/proxy-stream?url=${encodeURIComponent(videoUrl.trim())}`;
+                          setVideoUrl(proxied);
+                          setUrlTestResult(null);
+                          showToast('لینک روی حالت پروکسی سرور تنظیم شد.', 'info');
+                        }}
+                        className="mt-1 self-start px-2 py-1 bg-purple-600/40 hover:bg-purple-600/60 border border-purple-500/50 rounded-lg text-[11px] text-purple-200 font-semibold transition-colors"
+                      >
+                        ⚡ تبدیل به لینک استریم پروکسی سرور WatchTogether
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
