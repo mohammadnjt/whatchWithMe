@@ -5,13 +5,13 @@ export interface MovieQuality {
 
 export interface MovieInfo {
   title: string;
-  year: string;
-  genre: string;
-  tagline: string;
-  posterUrl: string;
+  posterUrl?: string;
   videoUrl: string;
-  duration: number; // in seconds
+  duration?: number; // in seconds
   qualities?: MovieQuality[];
+  year?: string;
+  genre?: string;
+  tagline?: string;
 }
 
 export interface AuthUser {
@@ -26,29 +26,26 @@ export interface AuthUser {
   approvedAt?: number;
 }
 
-export interface StorageFileItem {
+/** A video file stored on the server (data/films.json). */
+export interface FilmItem {
   id: string;
   filename: string;
-  originalName: string;
+  title: string;
   size: number;
   formattedSize: string;
-  mimeType: string;
   uploadedAt: number;
   uploadedBy?: string;
+  lastWatchedAt: number | null;
   expiresAt: number | null;
-  timeLeftMs: number | null;
-  formattedTimeLeft: string;
   url: string;
   isCurrentlyPlaying: boolean;
 }
 
 export interface StorageStats {
-  files: StorageFileItem[];
+  films: FilmItem[];
   totalBytes: number;
   formattedTotalSize: string;
-  totalFiles: number;
   retentionHours: number;
-  maxStorageBytes: number;
 }
 
 export interface Participant {

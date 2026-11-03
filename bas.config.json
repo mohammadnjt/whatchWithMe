@@ -2,9 +2,8 @@
   "id": "watchtogether",
   "name": "WatchTogether",
   "type": "backend",
-  "entry": "dist/server.js",
-  "build": "npm run build",
-  "start": "node dist/server.js",
+  "build": "npm install --include=dev --no-audit --no-fund && npm run build && go build -o watchtogether .",
+  "start": "./watchtogether",
   "autoStart": true,
   "stopTimeout": 10,
   "gitBranch": "main"

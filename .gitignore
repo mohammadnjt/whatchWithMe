@@ -7,3 +7,7 @@ coverage/
 .env*
 !.env.example
 uploads/
+# Runtime data (users, upload metadata) must not be tracked, or BAS git updates would reset it
+data/
+# Go server binary
+/watchtogether

@@ -12,3 +12,17 @@ export function formatTime(seconds: number): string {
   }
   return `${pad(mins)}:${pad(secs)}`;
 }
+
+/** Relative time in Persian, e.g. "۵ دقیقه پیش". */
+export function timeAgo(ms: number | null | undefined): string {
+  if (!ms) return 'هرگز';
+  const diff = Date.now() - ms;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'همین الان';
+  if (mins < 60) return `${mins.toLocaleString('fa-IR')} دقیقه پیش`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours.toLocaleString('fa-IR')} ساعت پیش`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days.toLocaleString('fa-IR')} روز پیش`;
+  return new Date(ms).toLocaleDateString('fa-IR');
+}
