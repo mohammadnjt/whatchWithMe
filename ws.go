@@ -350,11 +350,11 @@ func (s *Server) handleWSMessage(c *Client, data []byte) {
 		s.roomsChanged()
 
 		s.broadcastRoom(roomID, movieUpdatedMsg{"room:movie_updated", room.Movie, room.ScheduledTime, room.Status}, nil)
-		title := "بدون عنوان"
+		title := "Selected Video"
 		if truthy(room.Movie["title"]) {
 			title = jsString(room.Movie["title"])
 		}
-		s.broadcastRoom(roomID, notification(fmt.Sprintf("فیلم عوض شد: %s", title)), nil)
+		s.broadcastRoom(roomID, notification(fmt.Sprintf("Movie changed to %q", title)), nil)
 
 	case "room:update_schedule":
 		room.ScheduledTime = msg["scheduledTime"]
@@ -445,5 +445,5 @@ func (s *Server) handleJoin(c *Client, msg map[string]any) {
 	c.enqueue(marshal(map[string]any{"type": "room:init", "room": snapshot, "serverTime": now, "yourId": userID}))
 
 	s.broadcastRoom(roomID, map[string]any{"type": "room:participants_updated", "participants": room.Participants}, nil)
-	s.broadcastRoom(roomID, map[string]any{"type": "room:notification", "text": name + " وارد اتاق شد", "variant": "info"}, c)
+	s.broadcastRoom(roomID, map[string]any{"type": "room:notification", "text": name + " joined the room", "variant": "info"}, c)
 }

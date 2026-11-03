@@ -13,16 +13,17 @@ export function formatTime(seconds: number): string {
   return `${pad(mins)}:${pad(secs)}`;
 }
 
-/** Relative time in Persian, e.g. "۵ دقیقه پیش". */
-export function timeAgo(ms: number | null | undefined): string {
-  if (!ms) return 'هرگز';
-  const diff = Date.now() - ms;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'همین الان';
-  if (mins < 60) return `${mins.toLocaleString('fa-IR')} دقیقه پیش`;
+/** Relative time such as "5m ago" (en) or "۵ دقیقه پیش" (fa); null/0 means never. */
+export function timeAgo(ms: number | null | undefined, lang: 'en' | 'fa' = 'en'): string {
+  const fa = lang === 'fa';
+  if (!ms) return fa ? 'هرگز' : 'never';
+  const mins = Math.floor((Date.now() - ms) / 60000);
+  const n = (v: number) => (fa ? v.toLocaleString('fa-IR') : String(v));
+  if (mins < 1) return fa ? 'همین الان' : 'just now';
+  if (mins < 60) return fa ? `${n(mins)} دقیقه پیش` : `${mins}m ago`;
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours.toLocaleString('fa-IR')} ساعت پیش`;
+  if (hours < 24) return fa ? `${n(hours)} ساعت پیش` : `${hours}h ago`;
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days.toLocaleString('fa-IR')} روز پیش`;
-  return new Date(ms).toLocaleDateString('fa-IR');
+  if (days < 30) return fa ? `${n(days)} روز پیش` : `${days}d ago`;
+  return new Date(ms).toLocaleDateString(fa ? 'fa-IR' : undefined);
 }

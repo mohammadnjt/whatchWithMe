@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
+import { PlayerStatsBar } from './components/PlayerStatsBar';
 import { MovieSidebar } from './components/MovieSidebar';
 import { ChangeMovieModal } from './components/ChangeMovieModal';
 import { ScheduleModal } from './components/ScheduleModal';
@@ -15,108 +16,113 @@ import { LoginPage } from './components/LoginPage';
 import { HomeScreen } from './components/HomeScreen';
 import { AdminUsersModal } from './components/AdminUsersModal';
 import { useWatchTogetherSync } from './hooks/useWatchTogetherSync';
-import { Loader2, Mic } from 'lucide-react';
+import { MessageSquare, Users, Film, Radio, Sparkles, Loader2, Mic } from 'lucide-react';
 import { AuthUser } from './types';
 
-type ToastState = { text: string; variant?: string } | null;
-
-const Toast: React.FC<{ toast: ToastState }> = ({ toast }) =>
-  toast ? (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none" dir="rtl">
-      <div
-        className={`px-4 py-2 rounded-xl shadow-2xl border text-xs sm:text-sm font-semibold ${
-          toast.variant === 'success'
-            ? 'bg-emerald-950/95 border-emerald-500/50 text-emerald-300'
-            : toast.variant === 'warning'
-            ? 'bg-amber-950/95 border-amber-500/50 text-amber-300'
-            : 'bg-[#151930]/95 border-purple-500/40 text-purple-200'
-        }`}
-      >
-        {toast.text}
-      </div>
-    </div>
-  ) : null;
-
-// Display name and color edits are kept per user on this device.
-const profileKey = (userId: string) => `watchtogether_profile:${userId}`;
-
-function withSavedProfile(user: AuthUser): AuthUser {
-  try {
-    const saved = JSON.parse(localStorage.getItem(profileKey(user.id)) || 'null');
-    if (saved?.displayName) return { ...user, displayName: saved.displayName, color: saved.color || user.color };
-  } catch {
-    // ignore
-  }
-  return user;
-}
-
 export default function App() {
-  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('watchtogether_token'));
+  // Authentication State
+  const [authToken, setAuthToken] = useState<string | null>(() => {
+    return localStorage.getItem('watchtogether_token');
+  });
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [pendingCount, setPendingCount] = useState(0);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [isAdminUsersOpen, setIsAdminUsersOpen] = useState(false);
+
+  // User video stream quality preference (defaults to 720p as requested)
+  const [userQuality, setUserQuality] = useState('720p');
+
+  // Debounced disconnect banner to prevent flickering during initial handshake
   const [showDisconnectBanner, setShowDisconnectBanner] = useState(false);
 
-  const [appToast, setAppToast] = useState<ToastState>(null);
+  // Toast notification for global UI
+  const [appToast, setAppToast] = useState<{ text: string; variant?: string } | null>(null);
   const toastTimeoutRef = React.useRef<any>(null);
+
   const showToast = useCallback((text: string, variant: string = 'info') => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setAppToast({ text, variant });
-    toastTimeoutRef.current = setTimeout(() => setAppToast(null), 3000);
+    toastTimeoutRef.current = setTimeout(() => {
+      setAppToast(null);
+    }, 3500);
   }, []);
 
+  // Fetch initial pending users count if Admin
   const fetchPendingCount = useCallback(async (token: string) => {
     try {
-      const res = await fetch('/api/admin/users', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch('/api/admin/users', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (res.ok) {
         const data = await res.json();
-        if (typeof data.pendingCount === 'number') setPendingCount(data.pendingCount);
+        if (typeof data.pendingCount === 'number') {
+          setPendingCount(data.pendingCount);
+        }
       }
     } catch {
       // ignore
     }
   }, []);
 
-  // Restore the session on load
+  // Verify stored session on load
   useEffect(() => {
     const token = localStorage.getItem('watchtogether_token');
     if (!token) {
       setIsAuthChecking(false);
       return;
     }
-    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
+
+    fetch('/api/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (res.ok) return res.json();
+        throw new Error('Not authenticated');
+      })
       .then((data) => {
-        if (!data.user) throw new Error();
-        setCurrentUser(withSavedProfile(data.user));
-        setAuthToken(token);
-        if (data.user.role === 'admin') fetchPendingCount(token);
+        if (data.user) {
+          setCurrentUser(data.user);
+          setAuthToken(token);
+          if (data.user.role === 'admin') {
+            fetchPendingCount(token);
+          }
+        } else {
+          throw new Error('Invalid user object');
+        }
       })
       .catch(() => {
         localStorage.removeItem('watchtogether_token');
         setCurrentUser(null);
         setAuthToken(null);
       })
-      .finally(() => setIsAuthChecking(false));
+      .finally(() => {
+        setIsAuthChecking(false);
+      });
   }, [fetchPendingCount]);
 
-  const [roomId, setRoomId] = useState<string>(() => new URLSearchParams(window.location.search).get('room') || '');
+  // Read room from URL query or default to empty (which displays the Home / Lobby Screen)
+  const [roomId, setRoomId] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('room') || '';
+  });
 
+  // Modals state
   const [isChangeMovieOpen, setIsChangeMovieOpen] = useState(false);
   const [isScheduleOpen, setIsScheduleOpen] = useState(false);
   const [isRoomsOpen, setIsRoomsOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [isAdminUsersOpen, setIsAdminUsersOpen] = useState(false);
 
+  // User payload for WebSocket sync
   const syncUser = {
     id: currentUser?.id || 'guest',
     name: currentUser?.displayName || 'User',
     avatar: currentUser?.avatar || 'U',
     color: currentUser?.color || '#8b5cf6',
-    quality: '',
+    quality: userQuality,
     role: currentUser?.role || 'user',
   };
 
+  // WebSocket Sync Hook
   const {
     room,
     participants,
@@ -134,119 +140,200 @@ export default function App() {
     toggleMuteUser,
     sendVideoAction,
     sendChatMessage,
+    changeQuality,
     updateMovie,
     updateSchedule,
     showToast: showSyncToast,
   } = useWatchTogetherSync({
     roomId,
     user: syncUser,
-    onNewPendingUser: useCallback(() => setPendingCount((prev) => prev + 1), []),
+    onNewPendingUser: useCallback((_newUser: any) => {
+      setPendingCount((prev) => prev + 1);
+    }, []),
   });
 
-  // Show the reconnect banner only after 1.5s offline, to avoid flicker
+  // Only display disconnect banner if disconnected for more than 1.5s (eliminates flicker)
   useEffect(() => {
-    if (isConnected) {
+    if (!isConnected) {
+      const timer = setTimeout(() => setShowDisconnectBanner(true), 1500);
+      return () => clearTimeout(timer);
+    } else {
       setShowDisconnectBanner(false);
-      return;
     }
-    const timer = setTimeout(() => setShowDisconnectBanner(true), 1500);
-    return () => clearTimeout(timer);
   }, [isConnected]);
 
-  // Keep ?room= in the URL in sync
+  // Keep URL updated when room changes
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (roomId) url.searchParams.set('room', roomId);
-    else url.searchParams.delete('room');
-    if (url.toString() !== window.location.href) window.history.replaceState({}, '', url.toString());
+    if (roomId) {
+      if (url.searchParams.get('room') !== roomId) {
+        url.searchParams.set('room', roomId);
+        window.history.replaceState({}, '', url.toString());
+      }
+    } else {
+      if (url.searchParams.has('room')) {
+        url.searchParams.delete('room');
+        const cleanPath = url.pathname + (url.search ? url.search : '') + url.hash;
+        window.history.replaceState({}, '', cleanPath);
+      }
+    }
   }, [roomId]);
 
+  // Handle successful login
   const handleLoginSuccess = (user: AuthUser, token: string) => {
     localStorage.setItem('watchtogether_token', token);
     setAuthToken(token);
-    setCurrentUser(withSavedProfile(user));
-    if (user.role === 'admin') fetchPendingCount(token);
+    setCurrentUser(user);
+    if (user.role === 'admin') {
+      fetchPendingCount(token);
+    }
   };
 
+  // Handle logout
   const handleLogout = async () => {
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-      });
-    } catch {
-      // ignore
+    if (authToken) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+      } catch {
+        // silent
+      }
     }
     localStorage.removeItem('watchtogether_token');
     sessionStorage.removeItem('watchtogether_pending');
     setAuthToken(null);
     setCurrentUser(null);
+    showToast('شما با موفقیت از حساب کاربری خارج شدید.', 'info');
   };
 
+  // Handle user quality change
+  const handleQualityChange = (newQuality: string) => {
+    setUserQuality(newQuality);
+    changeQuality(newQuality);
+    showToast(`کیفیت ویدیو روی ${newQuality} تنظیم شد.`, 'info');
+  };
+
+  // Active toast (either from sync or from app)
   const activeToast = appToast || syncToast;
+
+  // Active movie for current room (null if room is newly created and no movie has been chosen yet)
   const currentMovie = room?.movie || null;
 
+  // 1. Initial Auth Loading Screen
   if (isAuthChecking) {
     return (
-      <div className="min-h-screen bg-[#070913] flex items-center justify-center">
-        <Loader2 className="w-7 h-7 text-purple-400 animate-spin" />
+      <div className="min-h-screen bg-[#070913] text-slate-100 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3 animate-pulse">
+          <div className="w-12 h-12 rounded-2xl bg-purple-600/30 border border-purple-500/50 flex items-center justify-center text-purple-400">
+            <Loader2 className="w-6 h-6 animate-spin" />
+          </div>
+          <span className="text-sm font-semibold text-slate-300">در حال بررسی احراز هویت...</span>
+        </div>
       </div>
     );
   }
 
+  // 2. Login & Registration Screen (If not authenticated)
   if (!currentUser) {
     return (
       <>
-        <Toast toast={activeToast} />
+        {activeToast && (
+          <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50">
+            <div
+              className={`px-4 py-2 rounded-xl backdrop-blur-md shadow-2xl border text-xs sm:text-sm font-semibold flex items-center gap-2 ${
+                activeToast.variant === 'success'
+                  ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+                  : activeToast.variant === 'warning'
+                  ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
+                  : 'bg-[#151930]/95 border-purple-500/40 text-purple-200'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 shrink-0 text-purple-400" />
+              <span>{activeToast.text}</span>
+            </div>
+          </div>
+        )}
         <LoginPage onLoginSuccess={handleLoginSuccess} showToast={showToast} />
       </>
     );
   }
 
-  const adminModal = currentUser.role === 'admin' && (
-    <AdminUsersModal
-      isOpen={isAdminUsersOpen}
-      onClose={() => setIsAdminUsersOpen(false)}
-      adminToken={authToken || ''}
-      showToast={showToast}
-      onPendingCountChange={setPendingCount}
-      onSetRoomMovie={
-        roomId
-          ? (videoUrl, title) => {
-              updateMovie({ title, videoUrl, posterUrl: '' });
-            }
-          : undefined
-      }
-    />
-  );
-
+  // 3. Home / Lobby Screen (When authenticated, but no specific room is selected)
   if (!roomId) {
     return (
       <>
-        <Toast toast={activeToast} />
+        {activeToast && (
+          <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-bounce duration-300">
+            <div
+              className={`px-4 py-2 rounded-xl backdrop-blur-md shadow-2xl border text-xs sm:text-sm font-semibold flex items-center gap-2 ${
+                activeToast.variant === 'success'
+                  ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+                  : activeToast.variant === 'warning'
+                  ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
+                  : 'bg-[#151930]/95 border-purple-500/40 text-purple-200 shadow-purple-900/30'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 shrink-0 text-purple-400" />
+              <span>{activeToast.text}</span>
+            </div>
+          </div>
+        )}
+
         <HomeScreen
           currentUser={currentUser}
-          onJoinRoom={setRoomId}
+          onJoinRoom={(newRoomId) => {
+            setRoomId(newRoomId);
+            showToast(`در حال پیوستن به اتاق «${newRoomId}»...`, 'info');
+          }}
           onLogout={handleLogout}
           onOpenAdminUsers={() => setIsAdminUsersOpen(true)}
           pendingUsersCount={pendingCount}
           showToast={showToast}
         />
-        {adminModal}
+
+        {/* Admin User Management Modal (if opened from Home) */}
+        {currentUser.role === 'admin' && (
+          <AdminUsersModal
+            isOpen={isAdminUsersOpen}
+            onClose={() => setIsAdminUsersOpen(false)}
+            adminToken={authToken || ''}
+            showToast={showToast}
+            onPendingCountChange={setPendingCount}
+          />
+        )}
       </>
     );
   }
 
+  // 4. Authenticated Party Room Screen (Playing & Chatting)
   return (
-    <div className="min-h-screen bg-[#0a0d18] text-slate-100 flex flex-col font-sans" dir="rtl">
-      <Toast toast={activeToast} />
+    <div className="min-h-screen bg-[#0a0d18] text-slate-100 flex flex-col font-sans selection:bg-purple-600 selection:text-white">
+      {/* Toast Notification Banner */}
+      {activeToast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 animate-bounce duration-300">
+          <div
+            className={`px-4 py-2 rounded-xl backdrop-blur-md shadow-2xl border text-xs sm:text-sm font-semibold flex items-center gap-2 ${
+              activeToast.variant === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+                : activeToast.variant === 'warning'
+                ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
+                : 'bg-[#151930]/95 border-purple-500/40 text-purple-200 shadow-purple-900/30'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 shrink-0 text-purple-400" />
+            <span>{activeToast.text}</span>
+          </div>
+        </div>
+      )}
 
+      {/* Top Navigation */}
       <Navbar
-        roomName={room?.name || roomId}
+        roomName={room?.name || 'Movie Night'}
         roomId={roomId}
         userName={currentUser.displayName}
         userAvatar={currentUser.avatar}
-        userColor={currentUser.color}
         userRole={currentUser.role}
         pendingUsersCount={pendingCount}
         onOpenRooms={() => setIsRoomsOpen(true)}
@@ -255,20 +342,29 @@ export default function App() {
         onOpenAdminUsers={() => setIsAdminUsersOpen(true)}
         onEditProfile={() => setIsProfileOpen(true)}
         onLogout={handleLogout}
-        onLeaveRoom={() => setRoomId('')}
+        onLeaveRoom={() => {
+          setRoomId('');
+          showToast('به صفحه اصلی بازگشتید.', 'info');
+        }}
         showToast={showToast}
       />
 
-      <main className="flex-1 max-w-[1720px] w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex flex-col gap-4">
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-[1720px] w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex flex-col gap-6">
+        {/* Connection status banner if reconnecting (shown after grace period to prevent flickering) */}
         {showDisconnectBanner && (
-          <div className="w-full bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-2 text-xs text-amber-300 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-            در حال اتصال مجدد…
+          <div className="w-full bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-2 flex items-center justify-between text-xs text-amber-300">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              <span>Reconnecting...</span>
+            </div>
           </div>
         )}
 
-        <div className="flex flex-col lg:flex-row gap-5 items-start">
-          <div className="flex-1 w-full min-w-0">
+        {/* Responsive Layout: Player on Left + Details/Chat Sidebar on Right */}
+        <div className="flex flex-col lg:flex-row gap-5 lg:gap-6 items-start">
+          {/* Left Column: Player & Stats */}
+          <div className="flex-1 w-full min-w-0 flex flex-col">
             <VideoPlayer
               videoRef={videoRef}
               videoUrl={currentMovie?.videoUrl || ''}
@@ -283,34 +379,89 @@ export default function App() {
               onOpenChangeMovie={() => setIsChangeMovieOpen(true)}
               showToast={showSyncToast}
             />
+
+            {/* Bottom 3 Cards + Audio Visualizer (Desktop view) */}
+            <div className="hidden sm:block">
+              <PlayerStatsBar
+                viewerCount={participants.filter((p) => p.online).length || 1}
+                latencyMs={latencyMs}
+                isAutoSyncActive={true}
+                isPlaying={room?.isPlaying || false}
+              />
+            </div>
+
+            {/* Quick actions */}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setIsChangeMovieOpen(true)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors cursor-pointer"
+                >
+                  تغییر فیلم یا لینک
+                </button>
+                <button
+                  onClick={() => setIsScheduleOpen(true)}
+                  className="px-3 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 text-xs font-medium border border-purple-500/40 transition-colors cursor-pointer"
+                >
+                  زمان‌بندی / شروع یهویی
+                </button>
+              </div>
+            </div>
           </div>
 
-          <MovieSidebar
-            movie={currentMovie}
-            scheduledTime={room?.scheduledTime || null}
-            status={room?.status || 'playing'}
-            participants={participants}
-            currentUserId={currentUser.id}
-            chatMessages={chatMessages}
-            isMicActive={isMicActive}
-            isPushToTalkActive={isPushToTalkActive}
-            isLocalSpeaking={isLocalSpeaking}
-            speakingUserIds={speakingUserIds}
-            locallyMutedUserIds={locallyMutedUserIds}
-            onToggleMic={toggleMic}
-            onToggleMuteUser={toggleMuteUser}
-            onSendMessage={sendChatMessage}
-            onStartNow={() => updateSchedule(new Date().toISOString(), 'playing')}
-            onOpenChangeMovie={() => setIsChangeMovieOpen(true)}
-          />
+          {/* Right Column: Movie Info, Participants, Quality & Live Chat */}
+          <div className="w-full lg:w-auto block">
+            <MovieSidebar
+              movie={
+                currentMovie || {
+                  title: 'در انتظار انتخاب فیلم',
+                  year: new Date().getFullYear().toString(),
+                  genre: 'هنوز فیلمی انتخاب نشده',
+                  tagline: '',
+                  posterUrl: '',
+                  videoUrl: '',
+                  duration: 0,
+                }
+              }
+              scheduledTime={room?.scheduledTime || null}
+              status={room?.status || 'playing'}
+              participants={participants}
+              currentUserId={syncUser.id}
+              selectedQuality={userQuality}
+              chatMessages={chatMessages}
+              isMicActive={isMicActive}
+              isPushToTalkActive={isPushToTalkActive}
+              isLocalSpeaking={isLocalSpeaking}
+              speakingUserIds={speakingUserIds}
+              locallyMutedUserIds={locallyMutedUserIds}
+              onToggleMic={toggleMic}
+              onToggleMuteUser={toggleMuteUser}
+              onQualityChange={handleQualityChange}
+              onSendMessage={sendChatMessage}
+              onStartNow={() => updateSchedule(new Date().toISOString(), 'playing')}
+              onOpenSchedule={() => setIsScheduleOpen(true)}
+              onOpenChangeMovie={() => setIsChangeMovieOpen(true)}
+            />
+          </div>
         </div>
       </main>
 
+      {/* Modals */}
       <ChangeMovieModal
         isOpen={isChangeMovieOpen}
         onClose={() => setIsChangeMovieOpen(false)}
-        currentMovie={currentMovie || { title: '', videoUrl: '' }}
-        onSaveMovie={updateMovie}
+        currentMovie={
+          currentMovie || {
+            title: '',
+            year: new Date().getFullYear().toString(),
+            genre: '',
+            tagline: '',
+            posterUrl: '',
+            videoUrl: '',
+            duration: 0,
+          }
+        }
+        onSaveMovie={(movieUpdate) => updateMovie(movieUpdate)}
         showToast={showToast}
       />
 
@@ -318,7 +469,7 @@ export default function App() {
         isOpen={isScheduleOpen}
         onClose={() => setIsScheduleOpen(false)}
         currentSchedule={room?.scheduledTime || null}
-        onSaveSchedule={updateSchedule}
+        onSaveSchedule={(time, status) => updateSchedule(time, status)}
         showToast={showToast}
       />
 
@@ -326,7 +477,7 @@ export default function App() {
         isOpen={isRoomsOpen}
         onClose={() => setIsRoomsOpen(false)}
         currentRoomId={roomId}
-        onSelectRoom={setRoomId}
+        onSelectRoom={(newRoomId) => setRoomId(newRoomId)}
         showToast={showToast}
       />
 
@@ -338,24 +489,46 @@ export default function App() {
         username={currentUser.username}
         role={currentUser.role}
         onSaveProfile={(name, color) => {
-          try {
-            localStorage.setItem(profileKey(currentUser.id), JSON.stringify({ displayName: name, color }));
-          } catch {
-            // ignore
-          }
-          setCurrentUser((prev) => (prev ? { ...prev, displayName: name, color } : null));
+          setCurrentUser((prev: AuthUser | null) => (prev ? { ...prev, displayName: name, color } : null));
         }}
         onLogout={handleLogout}
         showToast={showToast}
       />
 
-      {adminModal}
+      {/* Admin User Management Modal */}
+      {currentUser.role === 'admin' && (
+        <AdminUsersModal
+          isOpen={isAdminUsersOpen}
+          onClose={() => setIsAdminUsersOpen(false)}
+          adminToken={authToken || ''}
+          showToast={showToast}
+          onPendingCountChange={setPendingCount}
+          onSetRoomMovie={(videoUrl, title) => {
+            updateMovie({
+              title,
+              videoUrl,
+              posterUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop',
+            });
+            showToast(`فیلم اتاق به "${title}" تغییر کرد.`, 'success');
+          }}
+        />
+      )}
 
+      {/* Floating Push-To-Talk (Hold M) Active Indicator */}
       {isPushToTalkActive && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="px-4 py-2 rounded-2xl bg-emerald-950/95 border-2 border-emerald-400 text-emerald-200 flex items-center gap-2 font-semibold text-sm">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-all">
+          <div className="px-5 py-2.5 rounded-2xl bg-emerald-950/95 border-2 border-emerald-400 text-emerald-200 shadow-2xl shadow-emerald-500/40 backdrop-blur-md flex items-center gap-3 font-semibold text-xs sm:text-sm">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
             <Mic className="w-4 h-4 text-emerald-400 animate-pulse" />
-            در حال صحبت…
+            <span>در حال صحبت... (کلید M را رها کنید تا قطع شود)</span>
+            <div className="flex items-center gap-1 pr-1">
+              <span className="w-1 h-3 rounded-full bg-emerald-400 animate-bounce" />
+              <span className="w-1 h-5 rounded-full bg-emerald-400 animate-bounce delay-75" />
+              <span className="w-1 h-2 rounded-full bg-emerald-400 animate-bounce delay-150" />
+            </div>
           </div>
         </div>
       )}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -234,8 +235,23 @@ type filmItem struct {
 	UploadedBy         string   `json:"uploadedBy"`
 	LastWatchedAt      *float64 `json:"lastWatchedAt"`
 	ExpiresAt          *float64 `json:"expiresAt"`
+	TimeLeftMs         *float64 `json:"timeLeftMs"`
+	FormattedTimeLeft  string   `json:"formattedTimeLeft"`
 	URL                string   `json:"url"`
 	IsCurrentlyPlaying bool     `json:"isCurrentlyPlaying"`
+}
+
+// formatTimeLeft describes the time until auto-deletion, as shown in the admin panel.
+func formatTimeLeft(left float64) string {
+	if left <= 0 {
+		return "منقضی شده (آماده حذف)"
+	}
+	hours := int64(left / 3600000)
+	mins := int64(math.Mod(left, 3600000) / 60000)
+	if hours > 0 {
+		return fmt.Sprintf("%d ساعت و %d دقیقه", hours, mins)
+	}
+	return fmt.Sprintf("%d دقیقه", mins)
 }
 
 // filmList returns the films that exist on disk, newest first, and their total size.
@@ -254,15 +270,17 @@ func (s *Server) filmList() ([]filmItem, int64) {
 		item := filmItem{
 			ID: f.Filename, Filename: f.Filename, Title: f.Title, Size: info.Size(),
 			FormattedSize: formatBytes(info.Size()), UploadedAt: f.UploadedAt, UploadedBy: f.UploadedBy,
-			URL: f.URL, IsCurrentlyPlaying: active[f.URL],
+			FormattedTimeLeft: "همیشگی (بدون انقضا)", URL: f.URL, IsCurrentlyPlaying: active[f.URL],
 		}
 		if f.LastWatchedAt > 0 {
 			v := f.LastWatchedAt
 			item.LastWatchedAt = &v
 		}
 		if s.retentionHours > 0 {
-			v := f.lastActivity() + s.retentionHours*3600*1000
-			item.ExpiresAt = &v
+			expires := f.lastActivity() + s.retentionHours*3600*1000
+			left := math.Max(0, expires-float64(nowMs()))
+			item.ExpiresAt, item.TimeLeftMs = &expires, &left
+			item.FormattedTimeLeft = formatTimeLeft(left)
 		}
 		items = append(items, item)
 	}
@@ -284,7 +302,8 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	items, total := s.filmList()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"films": items, "totalBytes": total, "formattedTotalSize": formatBytes(total), "retentionHours": retention,
+		"films": items, "totalFiles": len(items), "totalBytes": total, "formattedTotalSize": formatBytes(total),
+		"retentionHours": retention, "maxStorageBytes": int64(10 << 30),
 	})
 }
 

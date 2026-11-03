@@ -200,12 +200,10 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
               if (data.actionBy && data.actionBy !== user.name) {
                 const actionLabel =
                   data.actionType === 'play'
-                    ? 'پخش کرد'
+                    ? 'started playing'
                     : data.actionType === 'pause'
-                    ? 'متوقف کرد'
-                    : data.actionType === 'rate'
-                    ? 'سرعت را تغییر داد'
-                    : 'جابه‌جا کرد';
+                    ? 'paused the movie'
+                    : 'jumped to another scene';
                 showToast(`${data.actionBy} ${actionLabel}`, 'info');
               }
               return;
@@ -245,7 +243,7 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
 
             if (data.type === 'admin:new_pending_user') {
               if (userRef.current?.role === 'admin') {
-                showToast(`درخواست جدید: ${data.user.displayName}`, 'info');
+                showToast(`کاربر جدید "${data.user.displayName}" درخواست ورود دارد.`, 'info');
                 onNewPendingUserRef.current?.(data.user);
               }
               return;
@@ -569,11 +567,11 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       }
 
       if (!isPtt) {
-        showToast('میکروفون روشن شد.', 'success');
+        showToast('میکروفون فعال شد. شما می‌توانید با اعضای اتاق صحبت کنید.', 'success');
       }
     } catch (err: any) {
       console.error('Failed to access microphone:', err);
-      showToast('دسترسی به میکروفون ممکن نیست.', 'warning');
+      showToast('دسترسی به میکروفون داده نشد یا در دسترس نیست.', 'warning');
       setIsMicActive(false);
       isMicActiveRef.current = false;
       isPTTHeldRef.current = false;
@@ -585,7 +583,7 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
   const toggleMic = useCallback(async () => {
     if (isMicActive) {
       stopMicrophone(false);
-      showToast('میکروفون خاموش شد.', 'info');
+      showToast('میکروفون بی‌صدا (خاموش) شد.', 'info');
     } else {
       await startMicrophone(false);
     }
@@ -667,10 +665,10 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       const next = new Set(prev);
       if (next.has(targetUserId)) {
         next.delete(targetUserId);
-        showToast(`صدای ${targetName || 'کاربر'} وصل شد.`, 'success');
+        showToast(`صدای ${targetName || 'کاربر'} برای شما وصل شد.`, 'success');
       } else {
         next.add(targetUserId);
-        showToast(`صدای ${targetName || 'کاربر'} قطع شد.`, 'info');
+        showToast(`صدای ${targetName || 'کاربر'} برای شما بی‌صدا شد.`, 'info');
       }
       return next;
     });

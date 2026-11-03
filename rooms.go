@@ -92,7 +92,15 @@ func (r *Room) playbackPosition(now int64) float64 {
 }
 
 func defaultMovieBase() map[string]any {
-	return map[string]any{"title": "", "posterUrl": "", "videoUrl": "", "duration": 0.0}
+	return map[string]any{
+		"title":     "Custom Movie",
+		"year":      strconv.Itoa(time.Now().Year()),
+		"genre":     "Cinema",
+		"tagline":   "",
+		"posterUrl": "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop",
+		"videoUrl":  "",
+		"duration":  0.0,
+	}
 }
 
 // ---------- rooms.json ----------
@@ -248,7 +256,7 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	if !truthy(body["id"]) {
 		id = "room-" + strconv.FormatInt(nowMs(), 36)
 	}
-	name := "اتاق جدید"
+	name := "New Watch Party"
 	if truthy(body["name"]) {
 		name = strings.TrimSpace(jsString(body["name"]))
 	}
@@ -278,5 +286,5 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 }
 
 func roomNameFromID(id string) string {
-	return strings.ReplaceAll(id, "-", " ")
+	return strings.ToUpper(strings.ReplaceAll(id, "-", " "))
 }
