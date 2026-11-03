@@ -752,6 +752,45 @@ func (s *Server) resolveMediaInput(videoURL string) (string, error) {
 	return "", errors.New("برای این ویدیو امکان استخراج زیرنویس وجود ندارد.")
 }
 
+// probeMediaReachable checks that the server itself can read a remote video
+// before ffmpeg is launched at it.
+//
+// This matters because extraction runs here, not in the viewer's browser, and
+// the two do not necessarily have the same access. Download hosts routinely
+// serve media only to addresses from their own country or ISP and answer
+// everyone else with 403 or 503 — including a server that the viewer's own
+// browser can stream the same file from perfectly well. Probing first turns a
+// late and cryptic ffmpeg error into an immediate explanation.
+func probeMediaReachable(ctx context.Context, input string) error {
+	if !strings.HasPrefix(input, "http://") && !strings.HasPrefix(input, "https://") {
+		return nil // a local file; ffmpeg will report any problem itself
+	}
+
+	resp, _, err := fetchRemote(ctx, input, "bytes=0-1023")
+	if err != nil {
+		return fmt.Errorf("سرور نمی‌تواند به این ویدیو وصل شود: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+
+	switch {
+	case resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusServiceUnavailable:
+		return errors.New("سرور میزبانِ این ویدیو به سرور ما اجازه دانلود نمی‌دهد " +
+			"(خطای " + strconv.Itoa(resp.StatusCode) + " — معمولاً محدودیت کشور یا IP). " +
+			"مرورگر شما فایل را پخش می‌کند، ولی استخراج زیرنویس روی سرور انجام می‌شود و از اینجا دسترسی نیست. " +
+			"فایل زیرنویس را دستی اضافه کنید.")
+	case resp.StatusCode >= 400:
+		return fmt.Errorf("سرور میزبان خطای %d داد (%s)", resp.StatusCode, statusText(resp))
+	}
+
+	// Some hosts answer a blocked request with 200 and an HTML notice.
+	if ct := resp.Header.Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
+		return errors.New("سرور میزبان به جای ویدیو یک صفحه HTML برگرداند " +
+			"(معمولاً صفحه محدودیت دسترسی). فایل زیرنویس را دستی اضافه کنید.")
+	}
+	return nil
+}
+
 // POST /api/subtitles/extract {videoUrl}
 func (s *Server) handleExtractSubtitles(w http.ResponseWriter, r *http.Request) {
 	videoURL := strings.TrimSpace(jsString(readJSON(r)["videoUrl"]))
@@ -768,6 +807,22 @@ func (s *Server) handleExtractSubtitles(w http.ResponseWriter, r *http.Request) 
 	input, err := s.resolveMediaInput(videoURL)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Fail fast and with a reason the user can act on, rather than starting a
+	// long ffmpeg run that will die on an error page.
+	probeCtx, cancelProbe := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancelProbe()
+	if err := probeMediaReachable(probeCtx, input); err != nil {
+		// Record it as the job outcome too, so the reason stays visible in the
+		// subtitle menu and not only in the toast that triggered it.
+		s.mu.Lock()
+		s.extractJobs[videoURL] = &extractJob{
+			Status: "error", Message: err.Error(), StartedAt: float64(nowMs()),
+		}
+		s.mu.Unlock()
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
 
