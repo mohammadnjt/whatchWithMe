@@ -13,6 +13,29 @@ interface UseWatchTogetherSyncOptions {
   onNewPendingUser?: (user: any) => void;
 }
 
+/** Remembers the mic preference across reloads and rooms. */
+const OPEN_MIC_KEY = 'watchtogether_open_mic';
+
+/**
+ * One peer in the voice mesh.
+ *
+ * `sender` is created up front from a sendrecv transceiver with no track, so
+ * turning the microphone on later is a `replaceTrack` call that needs no
+ * renegotiation, and push-to-talk is just toggling `track.enabled`.
+ *
+ * `polite` implements the perfect-negotiation tie-break: when both sides offer
+ * at once the polite peer rolls back and accepts the other's offer. The two ends
+ * must disagree, so it is derived from comparing the two user ids.
+ */
+interface PeerConn {
+  pc: RTCPeerConnection;
+  sender: RTCRtpSender | null;
+  audio: HTMLAudioElement;
+  polite: boolean;
+  makingOffer: boolean;
+  ignoreOffer: boolean;
+}
+
 export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatchTogetherSyncOptions) {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -36,18 +59,29 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     }
   });
 
+  // Open mic: keep the microphone live for the whole session instead of holding M.
+  const [isOpenMic, setIsOpenMic] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(OPEN_MIC_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  // Set when the browser refuses to autoplay incoming voice until the page is clicked.
+  const [isVoiceBlocked, setIsVoiceBlocked] = useState<boolean>(false);
+
   const isMicActiveRef = useRef<boolean>(false);
   const isPTTHeldRef = useRef<boolean>(false);
   const isPttTriggeredRef = useRef<boolean>(false);
+  const isOpenMicRef = useRef<boolean>(isOpenMic);
 
   const socketRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const isRemoteActionRef = useRef<boolean>(false);
   const toastTimeoutRef = useRef<any>(null);
 
-  // Voice Recording Refs
+  // Microphone capture and local voice-activity detection
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const vadAnimationRef = useRef<number | null>(null);
@@ -55,6 +89,15 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
   const locallyMutedUserIdsRef = useRef<Set<string>>(locallyMutedUserIds);
   const userRef = useRef(user);
   const onNewPendingUserRef = useRef(onNewPendingUser);
+
+  // WebRTC voice mesh. Audio travels peer-to-peer (or via TURN); the WebSocket
+  // only carries the handshake. One RTCPeerConnection per other participant.
+  const myIdRef = useRef<string>(user.id);
+  const peersRef = useRef<Map<string, PeerConn>>(new Map());
+  const iceServersRef = useRef<RTCIceServer[]>([]);
+  const iceReadyRef = useRef<Promise<void> | null>(null);
+  // Held in a ref so the socket effect never has to re-run when it changes.
+  const handleSignalRef = useRef<((s: string, k: string, p: any) => void) | null>(null);
 
   // Keep refs in sync with props without causing socket reconnects
   useEffect(() => {
@@ -143,6 +186,8 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
             }
 
             if (data.type === 'room:init') {
+              // Our server-side id decides which side of each WebRTC pair offers.
+              if (data.yourId) myIdRef.current = data.yourId;
               setRoom(data.room);
               setParticipants(data.room.participants);
               setChatMessages(data.room.chatMessages);
@@ -249,22 +294,10 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
               return;
             }
 
-            // Live Voice: Incoming audio chunk from participant
-            if (data.type === 'voice:audio') {
-              const senderId = data.senderId;
-              // Check if user has muted this sender locally
-              if (locallyMutedUserIdsRef.current.has(senderId)) {
-                return; // Muted by user: silent drop
-              }
-
-              // Play incoming voice chunk
-              try {
-                const audioEl = new Audio(`data:${data.mimeType || 'audio/webm'};base64,${data.chunk}`);
-                audioEl.volume = 1.0;
-                audioEl.play().catch(() => {});
-              } catch (audioErr) {
-                console.warn('Voice chunk playback error:', audioErr);
-              }
+            // Live Voice: WebRTC handshake from another participant. The audio
+            // itself never comes through the socket, only offers and candidates.
+            if (data.type === 'rtc:signal') {
+              handleSignalRef.current?.(data.senderId, data.kind, data.payload);
               return;
             }
 
@@ -367,32 +400,251 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     return () => clearInterval(syncInterval);
   }, [room, serverTimeOffset]);
 
+  // ---------------------------------------------------------------------------
+  // WebRTC voice mesh
+  // ---------------------------------------------------------------------------
+
+  const sendSignal = useCallback((target: string, kind: string, payload: any) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'rtc:signal', target, kind, payload }));
+    }
+  }, []);
+
+  /**
+   * Loads the ICE servers once per session. The TURN credentials it returns are
+   * short-lived and tied to this user, so they are fetched rather than hardcoded.
+   * A failure is not fatal: an empty list still allows peers on the same network
+   * to connect over host candidates.
+   */
+  const ensureIceServers = useCallback((): Promise<void> => {
+    if (!iceReadyRef.current) {
+      iceReadyRef.current = fetch('/api/rtc/ice', { credentials: 'include' })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+        .then((data) => {
+          if (Array.isArray(data?.iceServers)) iceServersRef.current = data.iceServers;
+        })
+        .catch((err) => {
+          console.warn('Could not load ICE servers; voice may not connect across networks:', err);
+        });
+    }
+    return iceReadyRef.current;
+  }, []);
+
+  /** Stops and forgets one peer. */
+  const closePeer = useCallback((peerId: string) => {
+    const peer = peersRef.current.get(peerId);
+    if (!peer) return;
+    peersRef.current.delete(peerId);
+    try {
+      peer.pc.ontrack = null;
+      peer.pc.onicecandidate = null;
+      peer.pc.onnegotiationneeded = null;
+      peer.pc.close();
+    } catch {
+      // already closed
+    }
+    peer.audio.srcObject = null;
+    peer.audio.remove();
+  }, []);
+
+  /**
+   * Opens the connection to one participant, following the "perfect negotiation"
+   * pattern so that two peers offering simultaneously cannot deadlock.
+   *
+   * The audio transceiver is created immediately with no track attached. That
+   * fixes the shape of the session once, so switching the microphone on later —
+   * and every push-to-talk press after that — costs no renegotiation.
+   */
+  const getOrCreatePeer = useCallback((peerId: string): PeerConn => {
+    const existing = peersRef.current.get(peerId);
+    if (existing) return existing;
+
+    const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
+
+    // Incoming voice plays through a detached element, one per peer, so each can
+    // be muted individually without touching the others.
+    const audio = document.createElement('audio');
+    audio.autoplay = true;
+    audio.muted = locallyMutedUserIdsRef.current.has(peerId);
+    (audio as any).playsInline = true;
+
+    const peer: PeerConn = {
+      pc,
+      sender: null,
+      audio,
+      // The two ends must reach opposite answers, so compare the ids.
+      polite: myIdRef.current < peerId,
+      makingOffer: false,
+      ignoreOffer: false,
+    };
+    peersRef.current.set(peerId, peer);
+
+    peer.sender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+    // If the mic is already live, this peer should hear it from the first frame.
+    if (mediaStreamRef.current) {
+      const track = mediaStreamRef.current.getAudioTracks()[0];
+      if (track) peer.sender.replaceTrack(track).catch(() => {});
+    }
+
+    pc.onnegotiationneeded = async () => {
+      try {
+        peer.makingOffer = true;
+        await pc.setLocalDescription();
+        sendSignal(peerId, 'offer', pc.localDescription);
+      } catch (err) {
+        console.warn('Voice negotiation failed:', err);
+      } finally {
+        peer.makingOffer = false;
+      }
+    };
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) sendSignal(peerId, 'candidate', candidate.toJSON());
+    };
+
+    pc.ontrack = ({ streams, track }) => {
+      const stream = streams[0] ?? new MediaStream([track]);
+      if (peer.audio.srcObject !== stream) {
+        peer.audio.srcObject = stream;
+      }
+      // Autoplay is blocked until the page has been interacted with; surface it
+      // rather than leaving the user wondering why nobody can be heard.
+      peer.audio.play().then(
+        () => setIsVoiceBlocked(false),
+        () => setIsVoiceBlocked(true)
+      );
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        // A path that worked can break when a network changes; ask for new candidates.
+        try {
+          pc.restartIce();
+        } catch {
+          // older browsers: the connection is rebuilt on the next participant update
+        }
+      }
+    };
+
+    return peer;
+  }, [sendSignal]);
+
+  /** Handles one inbound offer / answer / ICE candidate. */
+  const handleSignal = useCallback(
+    async (senderId: string, kind: string, payload: any) => {
+      if (!senderId || senderId === myIdRef.current) return;
+      await ensureIceServers();
+
+      const peer = getOrCreatePeer(senderId);
+      const { pc } = peer;
+
+      try {
+        if (kind === 'offer' || kind === 'answer') {
+          const collision = kind === 'offer' && (peer.makingOffer || pc.signalingState !== 'stable');
+          // Only the impolite peer may refuse; otherwise both would back off.
+          peer.ignoreOffer = !peer.polite && collision;
+          if (peer.ignoreOffer) return;
+
+          await pc.setRemoteDescription(payload);
+          if (kind === 'offer') {
+            await pc.setLocalDescription();
+            sendSignal(senderId, 'answer', pc.localDescription);
+          }
+          return;
+        }
+
+        if (kind === 'candidate') {
+          try {
+            await pc.addIceCandidate(payload);
+          } catch (err) {
+            // Candidates that arrive for an offer we discarded are expected.
+            if (!peer.ignoreOffer) throw err;
+          }
+        }
+      } catch (err) {
+        console.warn(`Voice signalling error (${kind}) from ${senderId}:`, err);
+      }
+    },
+    [ensureIceServers, getOrCreatePeer, sendSignal]
+  );
+
+  /** Pushes the current microphone track (or silence) to every peer. */
+  const applyLocalTrackToPeers = useCallback((track: MediaStreamTrack | null) => {
+    peersRef.current.forEach((peer) => {
+      peer.sender?.replaceTrack(track).catch(() => {});
+    });
+  }, []);
+
+  useEffect(() => {
+    handleSignalRef.current = handleSignal;
+  }, [handleSignal]);
+
+  // Keep one connection per online participant: open one for anybody new, drop
+  // the ones who left. Both ends run this, and perfect negotiation settles who
+  // offers, so it does not matter who notices the other first.
+  useEffect(() => {
+    if (!roomId || !isConnected) return;
+
+    const peerIds = participants
+      .filter((p) => p.id !== myIdRef.current && p.online)
+      .map((p) => p.id);
+
+    for (const id of Array.from(peersRef.current.keys())) {
+      if (!peerIds.includes(id)) closePeer(id);
+    }
+
+    if (peerIds.length === 0) return;
+    let cancelled = false;
+    ensureIceServers().then(() => {
+      if (cancelled) return;
+      peerIds.forEach((id) => getOrCreatePeer(id));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [participants, roomId, isConnected, ensureIceServers, getOrCreatePeer, closePeer]);
+
+  // Tear the whole mesh down when leaving the room or unmounting.
+  useEffect(() => {
+    return () => {
+      Array.from(peersRef.current.keys()).forEach(closePeer);
+    };
+  }, [roomId, closePeer]);
+
+  // Muting a participant silences their own audio element, leaving everyone
+  // else untouched and the connection up so unmuting is instant.
+  useEffect(() => {
+    peersRef.current.forEach((peer, id) => {
+      peer.audio.muted = locallyMutedUserIds.has(id);
+    });
+  }, [locallyMutedUserIds]);
+
+  // Open mic: persist the choice and keep the ref the callbacks read in sync.
+  useEffect(() => {
+    isOpenMicRef.current = isOpenMic;
+    try {
+      localStorage.setItem(OPEN_MIC_KEY, String(isOpenMic));
+    } catch {
+      // private browsing: the setting just will not persist
+    }
+  }, [isOpenMic]);
+
   // Voice Chat: Handle Microphone Stream & Voice Activity Detection (VAD)
   const stopMicrophone = useCallback((isPtt = false) => {
     if (isPtt) {
-      // Push-To-Talk release: keep stream warm and disable tracks instantly for 0ms lag next time
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        try {
-          mediaRecorderRef.current.pause();
-        } catch {}
-      }
+      // Push-to-talk release: keep the capture stream and the WebRTC senders in
+      // place and just mute the track, so the next press is audible immediately.
+      mediaStreamRef.current?.getAudioTracks().forEach((track) => {
+        track.enabled = false;
+      });
     } else {
-      // Full stop / toggle off: stop all tracks & recorder
+      // Toggled off for good: detach from the peers and release the device, so
+      // the browser's recording indicator goes away.
       if (vadAnimationRef.current) {
         cancelAnimationFrame(vadAnimationRef.current);
         vadAnimationRef.current = null;
       }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        try {
-          mediaRecorderRef.current.stop();
-        } catch {}
-        mediaRecorderRef.current = null;
-      }
+      applyLocalTrackToPeers(null);
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
         mediaStreamRef.current = null;
@@ -400,7 +652,9 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
         try {
           audioContextRef.current.close();
-        } catch {}
+        } catch {
+          // already closing
+        }
         audioContextRef.current = null;
       }
       analyserRef.current = null;
@@ -416,27 +670,27 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       socketRef.current.send(JSON.stringify({ type: 'voice:mic_state', isMicOn: false }));
       socketRef.current.send(JSON.stringify({ type: 'voice:speaking', isSpeaking: false }));
     }
-  }, []);
+  }, [applyLocalTrackToPeers]);
 
   const startMicrophone = useCallback(async (isPtt = false) => {
     try {
       if (isPtt) {
         isPttTriggeredRef.current = true;
       }
+      // Needed before any peer connection is built, and cheap once resolved.
+      await ensureIceServers();
 
       let stream = mediaStreamRef.current;
 
       // If we already have an active stream, immediately re-enable tracks (0ms latency!)
       if (stream && stream.active && stream.getAudioTracks().length > 0) {
-        stream.getAudioTracks().forEach((track) => {
-          track.enabled = true;
+        const track = stream.getAudioTracks()[0];
+        stream.getAudioTracks().forEach((t) => {
+          t.enabled = true;
         });
-
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-          try {
-            mediaRecorderRef.current.resume();
-          } catch {}
-        }
+        // The senders normally still hold this track; re-attach in case the mic
+        // was fully stopped and is being switched back on.
+        applyLocalTrackToPeers(track);
 
         setIsMicActive(true);
         isMicActiveRef.current = true;
@@ -509,50 +763,18 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
 
       vadAnimationRef.current = requestAnimationFrame(checkVolume);
 
-      // MediaRecorder to record audio chunks and stream to peers
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : 'audio/ogg';
+      // Hand the live track to every peer. Opus encoding, packetisation and the
+      // receive-side jitter buffer are all WebRTC's job from here on.
+      const micTrack = stream.getAudioTracks()[0];
+      applyLocalTrackToPeers(micTrack);
 
-      const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32000 });
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = async (e) => {
-        if (
-          isMicActiveRef.current &&
-          e.data &&
-          e.data.size > 0 &&
-          socketRef.current?.readyState === WebSocket.OPEN
-        ) {
-          // Convert audio blob to base64
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64 = (reader.result as string)?.split(',')[1];
-            if (base64 && isMicActiveRef.current && socketRef.current?.readyState === WebSocket.OPEN) {
-              socketRef.current.send(
-                JSON.stringify({
-                  type: 'voice:audio',
-                  chunk: base64,
-                  mimeType,
-                  senderName: userRef.current.name,
-                })
-              );
-            }
-          };
-          reader.readAsDataURL(e.data);
-        }
-      };
-
-      recorder.start(250); // Emit audio packet every 250ms for low latency
-
-      // If user released M key before permission dialog finished
-      if (isPtt && !isPTTHeldRef.current) {
-        stream.getAudioTracks().forEach((t) => { t.enabled = false; });
-        if (recorder.state === 'recording') {
-          try { recorder.pause(); } catch {}
-        }
+      // If the user released M before the permission dialog was answered, keep
+      // the stream for next time but start out silent. Open mic overrides this:
+      // there the microphone is meant to stay live regardless of the key.
+      if (isPtt && !isPTTHeldRef.current && !isOpenMicRef.current) {
+        stream.getAudioTracks().forEach((t) => {
+          t.enabled = false;
+        });
         setIsMicActive(false);
         isMicActiveRef.current = false;
         return;
@@ -578,7 +800,7 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       isPttTriggeredRef.current = false;
       stopMicrophone(false);
     }
-  }, [showToast, stopMicrophone]);
+  }, [showToast, stopMicrophone, applyLocalTrackToPeers, ensureIceServers]);
 
   const toggleMic = useCallback(async () => {
     if (isMicActive) {
@@ -588,6 +810,33 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       await startMicrophone(false);
     }
   }, [isMicActive, startMicrophone, stopMicrophone, showToast]);
+
+  /**
+   * Turns the "leave the mic open" mode on or off. With it on the microphone
+   * stays live for the session and M is not needed; turning it off closes the
+   * mic again so it cannot be left on unnoticed.
+   */
+  const toggleOpenMic = useCallback(() => {
+    setIsOpenMic((prev) => {
+      const next = !prev;
+      isOpenMicRef.current = next;
+      if (next) {
+        startMicrophone(false);
+        showToast('میکروفون همیشه باز است. برای صحبت لازم نیست M را نگه دارید.', 'success');
+      } else {
+        stopMicrophone(false);
+        showToast('میکروفون همیشه‌باز خاموش شد. برای صحبت کلید M را نگه دارید.', 'info');
+      }
+      return next;
+    });
+  }, [startMicrophone, stopMicrophone, showToast]);
+
+  // With open mic on, bring the microphone up as soon as the room is joined,
+  // and again after a reconnect, without waiting for a key press.
+  useEffect(() => {
+    if (!roomId || !isConnected || !isOpenMic || isMicActiveRef.current) return;
+    startMicrophone(false);
+  }, [roomId, isConnected, isOpenMic, startMicrophone]);
 
   // Global Push-To-Talk (PTT) Keyboard Listener for 'M' key
   useEffect(() => {
@@ -608,6 +857,8 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
 
       if (e.key === 'm' || e.key === 'M' || e.code === 'KeyM') {
         if (e.repeat) return; // Ignore repeated OS keydown events while held
+        // Open mic already holds the microphone open; M has nothing to do.
+        if (isOpenMicRef.current) return;
 
         isPTTHeldRef.current = true;
         setIsPushToTalkActive(true);
@@ -623,9 +874,10 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
         isPTTHeldRef.current = false;
         setIsPushToTalkActive(false);
 
+        // Releasing M must not close a mic the user asked to stay open.
         if (isPttTriggeredRef.current) {
           isPttTriggeredRef.current = false;
-          stopMicrophone(true);
+          if (!isOpenMicRef.current) stopMicrophone(true);
         }
       }
     };
@@ -636,7 +888,7 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
         setIsPushToTalkActive(false);
         if (isPttTriggeredRef.current) {
           isPttTriggeredRef.current = false;
-          stopMicrophone(true);
+          if (!isOpenMicRef.current) stopMicrophone(true);
         }
       }
     };
@@ -658,6 +910,20 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       stopMicrophone(false);
     };
   }, [stopMicrophone]);
+
+  /**
+   * Retries playback of every peer's audio. Browsers refuse to start audio
+   * before the page has been interacted with, so this is called from a click.
+   */
+  const resumeVoicePlayback = useCallback(() => {
+    let blocked = false;
+    peersRef.current.forEach((peer) => {
+      peer.audio.play().catch(() => {
+        blocked = true;
+      });
+    });
+    setIsVoiceBlocked(blocked);
+  }, []);
 
   // Toggle local mute for a specific user
   const toggleMuteUser = useCallback((targetUserId: string, targetName?: string) => {
@@ -767,9 +1033,13 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     isMicActive,
     isPushToTalkActive,
     isLocalSpeaking,
+    isOpenMic,
+    isVoiceBlocked,
     speakingUserIds,
     locallyMutedUserIds,
     toggleMic,
+    toggleOpenMic,
+    resumeVoicePlayback,
     toggleMuteUser,
     sendVideoAction,
     sendChatMessage,

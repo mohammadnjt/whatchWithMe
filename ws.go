@@ -163,6 +163,17 @@ func (s *Server) broadcastRoom(roomID string, v any, exclude *Client) {
 	}
 }
 
+// sendToUserInRoom sends v to one participant of roomID, on every socket that
+// user has open there. Caller holds mu.
+func (s *Server) sendToUserInRoom(roomID, userID string, v any) {
+	payload := marshal(v)
+	for c := range s.clients {
+		if c.joined && c.roomID == roomID && c.userID == userID {
+			c.enqueue(payload)
+		}
+	}
+}
+
 // broadcastWhere sends v to every connected client matching pred. Caller must not hold mu.
 func (s *Server) broadcastWhere(v any, pred func(*Client) bool) {
 	payload := marshal(v)
@@ -196,12 +207,14 @@ type videoSyncMsg struct {
 	ActionType            any     `json:"actionType,omitempty"`
 }
 
-type voiceAudioMsg struct {
-	Type       string `json:"type"`
-	SenderID   string `json:"senderId"`
-	SenderName any    `json:"senderName,omitempty"`
-	Chunk      any    `json:"chunk,omitempty"`
-	MimeType   any    `json:"mimeType,omitempty"`
+// rtcSignalMsg carries one WebRTC handshake message between two participants.
+// The payload (an SDP offer/answer or an ICE candidate) is opaque to the server:
+// it only routes it to the addressed peer in the same room.
+type rtcSignalMsg struct {
+	Type     string `json:"type"`
+	Kind     string `json:"kind"` // offer | answer | candidate
+	SenderID string `json:"senderId"`
+	Payload  any    `json:"payload"`
 }
 
 type movieUpdatedMsg struct {
@@ -371,11 +384,22 @@ func (s *Server) handleWSMessage(c *Client, data []byte) {
 		s.roomsChanged()
 		s.broadcastRoom(roomID, movieUpdatedMsg{"room:movie_updated", room.Movie, room.ScheduledTime, room.Status}, nil)
 
-	case "voice:audio":
-		s.broadcastRoom(roomID, voiceAudioMsg{
-			Type: "voice:audio", SenderID: c.userID, SenderName: msg["senderName"],
-			Chunk: msg["chunk"], MimeType: msg["mimeType"],
-		}, c)
+	// WebRTC handshake between two participants. Audio itself never passes
+	// through here: it goes peer-to-peer, or over the TURN relay.
+	case "rtc:signal":
+		target, _ := msg["target"].(string)
+		kind, _ := msg["kind"].(string)
+		if target == "" || target == c.userID {
+			return
+		}
+		switch kind {
+		case "offer", "answer", "candidate":
+		default:
+			return // unknown handshake step
+		}
+		s.sendToUserInRoom(roomID, target, rtcSignalMsg{
+			Type: "rtc:signal", Kind: kind, SenderID: c.userID, Payload: msg["payload"],
+		})
 
 	case "voice:mic_state":
 		if p := room.participant(c.userID); p != nil {

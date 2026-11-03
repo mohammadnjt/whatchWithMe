@@ -30,9 +30,10 @@ var (
 )
 
 type Server struct {
-	dataDir   string
-	uploadDir string
-	distDir   string
+	dataDir     string
+	uploadDir   string
+	subtitleDir string
+	distDir     string
 
 	adminUsername string
 	adminPassword string
@@ -43,15 +44,19 @@ type Server struct {
 	users    []*UserRecord
 	sessions map[string]*Session
 
-	// mu guards rooms, WebSocket clients and films.
+	// mu guards rooms, WebSocket clients, films and subtitles.
 	mu             sync.Mutex
 	rooms          map[string]*Room
 	roomOrder      []string
 	clients        map[*Client]struct{}
 	films          []*Film
+	subtitles      []*SubtitleTrack
+	extractJobs    map[string]*extractJob // keyed by video URL
 	retentionHours float64
 
 	roomSave roomSaver
+
+	turn turnConfig // ICE settings for voice; resolved once at startup
 }
 
 func main() {
@@ -64,12 +69,14 @@ func main() {
 	s := &Server{
 		dataDir:       filepath.Join(rootDir, "data"),
 		uploadDir:     filepath.Join(rootDir, "uploads"),
+		subtitleDir:   filepath.Join(rootDir, "data", "subtitles"),
 		distDir:       filepath.Join(rootDir, "dist"),
 		adminUsername: envOr("ADMIN_USERNAME", "admin"),
 		adminPassword: envOr("ADMIN_PASSWORD", "admin123"),
 		sessions:      map[string]*Session{},
 		rooms:         map[string]*Room{},
 		clients:       map[*Client]struct{}{},
+		extractJobs:   map[string]*extractJob{},
 	}
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("FILE_RETENTION_HOURS")), 64); err == nil && v > 0 {
 		s.retentionHours = v
@@ -78,7 +85,7 @@ func main() {
 		logErr.Printf("[Auth] WARNING: ADMIN_PASSWORD is not set in .env; the default admin password is in use.")
 	}
 
-	for _, dir := range []string{s.dataDir, s.uploadDir} {
+	for _, dir := range []string{s.dataDir, s.uploadDir, s.subtitleDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			logErr.Fatalf("[Server] Cannot create %s: %v", dir, err)
 		}
@@ -90,8 +97,19 @@ func main() {
 	s.loadUsers()
 	s.mu.Lock()
 	s.loadFilms()
+	s.loadSubtitles()
 	s.loadRooms()
 	s.mu.Unlock()
+
+	// Voice needs ICE servers; the relay is optional and logs its own failures.
+	s.turn = s.loadTURNConfig()
+	if relay := s.startTURN(s.turn); relay != nil {
+		defer relay.Close()
+	}
+	if !ffmpegAvailable() {
+		logInfo.Printf("[Subs] ffmpeg/ffprobe not found: subtitles muxed into a video cannot be extracted. " +
+			"Subtitle files can still be uploaded or fetched by link.")
+	}
 
 	if _, err := os.Stat(filepath.Join(s.distDir, "index.html")); err != nil {
 		logErr.Printf("[Server] WARNING: %s is missing. Build the frontend with `npm run build`.", filepath.Join(s.distDir, "index.html"))
@@ -164,6 +182,18 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/proxy-stream", s.requireUser(s.handleProxyStream))
 	mux.HandleFunc("POST /api/check-url", s.requireUser(s.handleCheckURL))
 	mux.HandleFunc("POST /api/storage/remote-fetch", s.requireUser(s.handleRemoteFetch))
+
+	// Subtitles. The .vtt files themselves are fetched by the <track> element,
+	// which sends no Authorization header, so they rely on the session cookie.
+	mux.HandleFunc("GET /api/subtitles", s.requireUser(s.handleListSubtitles))
+	mux.HandleFunc("GET /api/subtitles/file/{filename}", s.requireUser(s.handleSubtitleFile))
+	mux.HandleFunc("POST /api/subtitles/upload", s.requireUser(s.handleUploadSubtitle))
+	mux.HandleFunc("POST /api/subtitles/from-url", s.requireUser(s.handleSubtitleFromURL))
+	mux.HandleFunc("POST /api/subtitles/extract", s.requireUser(s.handleExtractSubtitles))
+	mux.HandleFunc("DELETE /api/subtitles/{id}", s.requireUser(s.handleDeleteSubtitle))
+
+	// Voice chat: ICE servers for the WebRTC mesh (signalling runs over the WebSocket).
+	mux.HandleFunc("GET /api/rtc/ice", s.requireUser(s.handleICEConfig))
 
 	// Rooms
 	mux.HandleFunc("GET /api/rooms", s.requireUser(s.handleListRooms))

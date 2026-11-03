@@ -134,9 +134,13 @@ export default function App() {
     isMicActive,
     isPushToTalkActive,
     isLocalSpeaking,
+    isOpenMic,
+    isVoiceBlocked,
     speakingUserIds,
     locallyMutedUserIds,
     toggleMic,
+    toggleOpenMic,
+    resumeVoicePlayback,
     toggleMuteUser,
     sendVideoAction,
     sendChatMessage,
@@ -432,9 +436,13 @@ export default function App() {
               isMicActive={isMicActive}
               isPushToTalkActive={isPushToTalkActive}
               isLocalSpeaking={isLocalSpeaking}
+              isOpenMic={isOpenMic}
+              isVoiceBlocked={isVoiceBlocked}
               speakingUserIds={speakingUserIds}
               locallyMutedUserIds={locallyMutedUserIds}
               onToggleMic={toggleMic}
+              onToggleOpenMic={toggleOpenMic}
+              onResumeVoice={resumeVoicePlayback}
               onToggleMuteUser={toggleMuteUser}
               onQualityChange={handleQualityChange}
               onSendMessage={sendChatMessage}

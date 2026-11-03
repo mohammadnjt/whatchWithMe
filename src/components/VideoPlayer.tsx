@@ -23,6 +23,7 @@ import {
   Check,
   Copy,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react';
 import { formatTime } from '../utils/formatTime';
 import { MovieInfo } from '../types';
@@ -35,6 +36,25 @@ interface VideoErrorInfo {
   canProxy: boolean;
   canDownload: boolean;
   isMkv?: boolean;
+}
+
+/** A WebVTT track the server has for the current video. */
+interface SubtitleTrackInfo {
+  id: string;
+  label: string;
+  lang: string;
+  source: 'upload' | 'url' | 'embedded';
+  url: string;
+  size: number;
+  uploadedAt: number;
+}
+
+interface ExtractionState {
+  status: 'running' | 'done' | 'error';
+  message?: string;
+  found?: number;
+  added?: number;
+  skipped?: string[];
 }
 
 interface VideoPlayerProps {
@@ -78,9 +98,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isBuffering, setIsBuffering] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
-  const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverPosition, setHoverPosition] = useState<number>(0);
+
+  // Subtitles. Tracks live on the server as WebVTT; the browser renders them
+  // natively through the <track> elements below.
+  const [subTracks, setSubTracks] = useState<SubtitleTrackInfo[]>([]);
+  const [activeSubId, setActiveSubId] = useState<string | null>(null);
+  const [showSubMenu, setShowSubMenu] = useState(false);
+  const [canExtract, setCanExtract] = useState(false);
+  const [extraction, setExtraction] = useState<ExtractionState | null>(null);
+  const [subBusy, setSubBusy] = useState(false);
+  const [subUrlInput, setSubUrlInput] = useState('');
+  const [showSubUrlInput, setShowSubUrlInput] = useState(false);
+  const subFileInputRef = useRef<HTMLInputElement>(null);
 
   // Video error & connection state
   const [videoError, setVideoError] = useState<VideoErrorInfo | null>(null);
@@ -539,6 +570,174 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     showToast(`Speed set to ${speed}x for everyone`, 'info');
   };
 
+  // ---------------------------------------------------------------------------
+  // Subtitles
+  // ---------------------------------------------------------------------------
+
+  const loadSubtitles = useCallback(async () => {
+    if (!videoUrl) {
+      setSubTracks([]);
+      setExtraction(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/subtitles?videoUrl=${encodeURIComponent(videoUrl)}`, {
+        credentials: 'include',
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setSubTracks(Array.isArray(data.tracks) ? data.tracks : []);
+      setCanExtract(Boolean(data.canExtract));
+      setExtraction(data.extraction ?? null);
+    } catch {
+      // Offline or logged out; the menu simply shows no tracks.
+    }
+  }, [videoUrl]);
+
+  // Reload the track list whenever the room switches to another video.
+  useEffect(() => {
+    setActiveSubId(null);
+    loadSubtitles();
+  }, [loadSubtitles]);
+
+  // While ffmpeg is reading the video, poll until it reports a result.
+  useEffect(() => {
+    if (extraction?.status !== 'running') return;
+    const timer = setInterval(loadSubtitles, 4000);
+    return () => clearInterval(timer);
+  }, [extraction?.status, loadSubtitles]);
+
+  /**
+   * Shows exactly one track, or none.
+   *
+   * The <track> elements are rendered declaratively but their display is
+   * controlled here: a TextTrack reports the id of its element, so the active
+   * one is matched by id and every other is disabled. Tracks left in "hidden"
+   * rather than "disabled" would keep firing cue events for nothing.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const apply = () => {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const tt = video.textTracks[i];
+        tt.mode = tt.id && tt.id === activeSubId ? 'showing' : 'disabled';
+      }
+    };
+    apply();
+    // A track element added in the same render may not be in textTracks yet.
+    video.textTracks.addEventListener('addtrack', apply);
+    return () => video.textTracks.removeEventListener('addtrack', apply);
+  }, [activeSubId, subTracks, videoRef]);
+
+  const selectSubtitle = (id: string | null) => {
+    setActiveSubId(id);
+    setShowSubMenu(false);
+    if (!id) {
+      showToast('زیرنویس خاموش شد.', 'info');
+      return;
+    }
+    const picked = subTracks.find((t) => t.id === id);
+    showToast(`زیرنویس «${picked?.label ?? ''}» فعال شد.`, 'success');
+  };
+
+  const uploadSubtitleFile = async (file: File) => {
+    if (!videoUrl) return;
+    setSubBusy(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('videoUrl', videoUrl);
+      const res = await fetch('/api/subtitles/upload', {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.error || 'افزودن زیرنویس ناموفق بود.', 'warning');
+        return;
+      }
+      await loadSubtitles();
+      if (data?.track?.id) setActiveSubId(data.track.id);
+      showToast('زیرنویس اضافه و فعال شد.', 'success');
+    } catch {
+      showToast('افزودن زیرنویس ناموفق بود.', 'warning');
+    } finally {
+      setSubBusy(false);
+    }
+  };
+
+  const addSubtitleFromUrl = async () => {
+    const target = subUrlInput.trim();
+    if (!target || !videoUrl) return;
+    setSubBusy(true);
+    try {
+      const res = await fetch('/api/subtitles/from-url', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target, videoUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.error || 'دریافت زیرنویس ناموفق بود.', 'warning');
+        return;
+      }
+      setSubUrlInput('');
+      setShowSubUrlInput(false);
+      await loadSubtitles();
+      if (data?.track?.id) setActiveSubId(data.track.id);
+      showToast('زیرنویس از لینک اضافه و فعال شد.', 'success');
+    } catch {
+      showToast('دریافت زیرنویس ناموفق بود.', 'warning');
+    } finally {
+      setSubBusy(false);
+    }
+  };
+
+  const extractSubtitles = async () => {
+    if (!videoUrl) return;
+    setSubBusy(true);
+    try {
+      const res = await fetch('/api/subtitles/extract', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data?.error || 'استخراج زیرنویس ناموفق بود.', 'warning');
+        return;
+      }
+      setExtraction(data.extraction ?? { status: 'running' });
+      showToast('در حال خواندن ویدیو برای یافتن زیرنویس… این کار چند دقیقه طول می‌کشد.', 'info');
+    } catch {
+      showToast('استخراج زیرنویس ناموفق بود.', 'warning');
+    } finally {
+      setSubBusy(false);
+    }
+  };
+
+  const deleteSubtitle = async (id: string) => {
+    try {
+      const res = await fetch(`/api/subtitles/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        showToast('حذف زیرنویس ناموفق بود.', 'warning');
+        return;
+      }
+      if (activeSubId === id) setActiveSubId(null);
+      await loadSubtitles();
+    } catch {
+      showToast('حذف زیرنویس ناموفق بود.', 'warning');
+    }
+  };
+
   const progressPercent = localDuration > 0 ? (localCurrentTime / localDuration) * 100 : 0;
 
   // When no movie videoUrl is present, render the empty state for selecting or uploading a video
@@ -696,16 +895,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         preload="auto"
         onClick={togglePlay}
         className="w-full h-full object-cover cursor-pointer"
-      />
-
-      {/* Mock cinematic subtitles overlay if enabled */}
-      {subtitlesEnabled && isPlaying && !videoError && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-lg bg-black/75 backdrop-blur-sm text-yellow-300 font-medium text-sm sm:text-base tracking-wide text-center max-w-[85%] pointer-events-none drop-shadow-md">
-          {localCurrentTime < 1470
-            ? "We used to look up at the sky and wonder at our place in the stars..."
-            : "Now we just look down and worry about our place in the dirt."}
-        </div>
-      )}
+      >
+        {/* Real subtitles. The browser does the timing and rendering; which one
+            is visible is set through textTracks in the effect above, so no
+            `default` attribute is used here. */}
+        {subTracks.map((t) => (
+          <track
+            key={t.id}
+            id={t.id}
+            kind="subtitles"
+            label={t.label}
+            srcLang={t.lang || 'und'}
+            src={t.url}
+          />
+        ))}
+      </video>
 
       {/* Buffering Indicator */}
       {isBuffering && !videoError && (
@@ -991,19 +1195,156 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {/* Right Controls */}
           <div className="flex items-center gap-2 sm:gap-3 relative">
-            {/* Subtitles CC Toggle */}
-            <button
-              onClick={() => {
-                setSubtitlesEnabled(!subtitlesEnabled);
-                showToast(subtitlesEnabled ? 'Subtitles off' : 'Subtitles on', 'info');
-              }}
-              className={`p-1.5 rounded-md text-xs font-semibold uppercase tracking-wider transition-colors ${
-                subtitlesEnabled ? 'text-purple-400 bg-purple-600/20' : 'text-slate-400 hover:text-white'
-              }`}
-              title="Closed Captions (CC)"
-            >
-              <Subtitles className="w-5 h-5" />
-            </button>
+            {/* Subtitles */}
+            <div className="relative">
+              <input
+                ref={subFileInputRef}
+                type="file"
+                accept=".srt,.vtt,.ass,.ssa,.sub,text/plain"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadSubtitleFile(file);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                onClick={() => setShowSubMenu(!showSubMenu)}
+                className={`p-1.5 rounded-md transition-colors ${
+                  activeSubId || showSubMenu ? 'text-purple-400 bg-purple-600/20' : 'text-slate-400 hover:text-white'
+                }`}
+                title="زیرنویس"
+              >
+                <Subtitles className="w-5 h-5" />
+              </button>
+
+              {showSubMenu && (
+                <div
+                  dir="rtl"
+                  className="absolute right-0 bottom-9 w-72 bg-[#111425] border border-slate-700/80 rounded-xl shadow-2xl p-2 z-50 text-xs"
+                >
+                  <div className="px-2 py-1 font-bold text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 mb-1">
+                    زیرنویس
+                  </div>
+
+                  <button
+                    onClick={() => selectSubtitle(null)}
+                    className={`w-full text-right px-2 py-1.5 rounded flex items-center justify-between ${
+                      !activeSubId ? 'bg-purple-600/30 text-purple-300 font-bold' : 'text-slate-300 hover:bg-slate-800/80'
+                    }`}
+                  >
+                    <span>خاموش</span>
+                    {!activeSubId && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </button>
+
+                  {subTracks.map((t) => (
+                    <div key={t.id} className="flex items-center gap-1">
+                      <button
+                        onClick={() => selectSubtitle(t.id)}
+                        className={`flex-1 text-right px-2 py-1.5 rounded flex items-center justify-between min-w-0 ${
+                          activeSubId === t.id
+                            ? 'bg-purple-600/30 text-purple-300 font-bold'
+                            : 'text-slate-300 hover:bg-slate-800/80'
+                        }`}
+                      >
+                        <span className="truncate">{t.label}</span>
+                        <span className="flex items-center gap-1 shrink-0">
+                          {t.source === 'embedded' && (
+                            <span className="text-[9px] text-slate-500">از ویدیو</span>
+                          )}
+                          {activeSubId === t.id && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => deleteSubtitle(t.id)}
+                        className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 shrink-0"
+                        title="حذف این زیرنویس"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+
+                  {subTracks.length === 0 && (
+                    <div className="px-2 py-2 text-[11px] text-slate-500 leading-relaxed">
+                      برای این ویدیو زیرنویسی ثبت نشده است. زیرنویس داخل فایل‌های MKV را
+                      مرورگر نمایش نمی‌دهد و باید استخراج شود.
+                    </div>
+                  )}
+
+                  <div className="border-t border-slate-800 mt-1 pt-1">
+                    <button
+                      disabled={subBusy}
+                      onClick={() => subFileInputRef.current?.click()}
+                      className="w-full text-right px-2 py-1.5 rounded text-slate-300 hover:bg-slate-800/80 flex items-center gap-2 disabled:opacity-50"
+                    >
+                      <Upload className="w-3.5 h-3.5 shrink-0" />
+                      <span>افزودن فایل زیرنویس (SRT / ASS / VTT)</span>
+                    </button>
+
+                    <button
+                      disabled={subBusy}
+                      onClick={() => setShowSubUrlInput(!showSubUrlInput)}
+                      className="w-full text-right px-2 py-1.5 rounded text-slate-300 hover:bg-slate-800/80 flex items-center gap-2 disabled:opacity-50"
+                    >
+                      <Link2 className="w-3.5 h-3.5 shrink-0" />
+                      <span>افزودن از لینک</span>
+                    </button>
+
+                    {showSubUrlInput && (
+                      <div className="px-2 py-1.5 flex gap-1">
+                        <input
+                          dir="ltr"
+                          value={subUrlInput}
+                          onChange={(e) => setSubUrlInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') addSubtitleFromUrl();
+                          }}
+                          placeholder="https://.../subtitle.srt"
+                          className="flex-1 min-w-0 bg-slate-900/80 border border-slate-700 rounded px-2 py-1 text-[11px] text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500"
+                        />
+                        <button
+                          disabled={subBusy || !subUrlInput.trim()}
+                          onClick={addSubtitleFromUrl}
+                          className="px-2 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white font-semibold disabled:opacity-40 shrink-0"
+                        >
+                          افزودن
+                        </button>
+                      </div>
+                    )}
+
+                    {canExtract && (
+                      <button
+                        disabled={subBusy || extraction?.status === 'running'}
+                        onClick={extractSubtitles}
+                        className="w-full text-right px-2 py-1.5 rounded text-slate-300 hover:bg-slate-800/80 flex items-center gap-2 disabled:opacity-50"
+                      >
+                        {extraction?.status === 'running' ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                        ) : (
+                          <Download className="w-3.5 h-3.5 shrink-0" />
+                        )}
+                        <span>
+                          {extraction?.status === 'running'
+                            ? 'در حال استخراج از ویدیو…'
+                            : 'استخراج زیرنویس از خود ویدیو'}
+                        </span>
+                      </button>
+                    )}
+
+                    {extraction?.message && extraction.status !== 'running' && (
+                      <div
+                        className={`px-2 py-1.5 text-[11px] leading-relaxed ${
+                          extraction.status === 'error' ? 'text-amber-400' : 'text-slate-500'
+                        }`}
+                      >
+                        {extraction.message}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Settings Speed Menu */}
             <div className="relative">

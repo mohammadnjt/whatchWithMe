@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+/*
+ * Subtitle cues.
+ *
+ * Subtitles are rendered by the browser from the WebVTT <track> elements in the
+ * player, so they are styled through ::cue rather than with our own overlay.
+ * Only a small set of properties is allowed inside ::cue — font, colour,
+ * background and text-shadow among them — so the rules stay deliberately plain.
+ *
+ * The font stack leads with faces that carry a full Persian glyph set, since the
+ * default sans-serif renders Persian poorly on most systems.
+ */
+video::cue {
+  font-family: "Vazirmatn", "IRANSans", "Segoe UI", "Tahoma", system-ui, sans-serif;
+  font-size: 1.05em;
+  line-height: 1.6;
+  color: #fff;
+  background-color: rgba(0, 0, 0, 0.72);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* Perso-Arabic scripts read right to left. */
+video::cue(:lang(fa)),
+video::cue(:lang(ar)),
+video::cue(:lang(ku)) {
+  font-family: "Vazirmatn", "IRANSans", "Tahoma", system-ui, sans-serif;
+}

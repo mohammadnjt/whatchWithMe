@@ -31,10 +31,14 @@ interface MovieSidebarProps {
   chatMessages: ChatMessage[];
   isMicActive?: boolean;
   isPushToTalkActive?: boolean;
+  isOpenMic?: boolean;
+  isVoiceBlocked?: boolean;
   isLocalSpeaking?: boolean;
   speakingUserIds?: Set<string>;
   locallyMutedUserIds?: Set<string>;
   onToggleMic?: () => void;
+  onToggleOpenMic?: () => void;
+  onResumeVoice?: () => void;
   onToggleMuteUser?: (userId: string, name?: string) => void;
   onQualityChange: (quality: string) => void;
   onSendMessage: (text: string) => void;
@@ -53,10 +57,14 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
   chatMessages,
   isMicActive = false,
   isPushToTalkActive = false,
+  isOpenMic = false,
+  isVoiceBlocked = false,
   isLocalSpeaking = false,
   speakingUserIds = new Set(),
   locallyMutedUserIds = new Set(),
   onToggleMic,
+  onToggleOpenMic,
+  onResumeVoice,
   onToggleMuteUser,
   onQualityChange,
   onSendMessage,
@@ -216,9 +224,15 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </div>
           <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-            <span className="px-1.5 py-0.5 rounded bg-purple-600/25 border border-purple-500/30 text-purple-300 text-[10px] font-mono font-semibold" title="نگه‌داشتن کلید M برای صحبت (Push-to-Talk)">
-              کلید M = صحبت
-            </span>
+            {isOpenMic ? (
+              <span className="px-1.5 py-0.5 rounded bg-emerald-600/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-semibold" title="میکروفون تا پایان نشست باز می‌ماند">
+                میکروفون همیشه باز
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.5 rounded bg-purple-600/25 border border-purple-500/30 text-purple-300 text-[10px] font-mono font-semibold" title="نگه‌داشتن کلید M برای صحبت (Push-to-Talk)">
+                کلید M = صحبت
+              </span>
+            )}
             <Radio className="w-3.5 h-3.5 text-emerald-400" />
             <span>گفتگوی صوتی</span>
           </div>
@@ -272,11 +286,46 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
               <span className="text-emerald-400 font-bold animate-pulse">در حال صحبت (M)...</span>
             ) : isMicActive ? (
               <span className="text-emerald-400 font-medium">صدایتان پخش می‌شود</span>
+            ) : isOpenMic ? (
+              <span className="text-slate-400">در حال اتصال میکروفون…</span>
             ) : (
               <span className="text-slate-400">کلیک یا نگه‌داشتن M</span>
             )}
           </div>
         </div>
+
+        {/* Open mic: speak without holding M for the whole session. */}
+        <label
+          className="mb-3.5 flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-[#0b0e1d] border border-slate-800/90 cursor-pointer hover:border-slate-700"
+          title="میکروفون باز می‌ماند و برای صحبت لازم نیست کلید M را نگه دارید"
+        >
+          <span className="flex items-center gap-2 min-w-0">
+            <Mic className={`w-3.5 h-3.5 shrink-0 ${isOpenMic ? 'text-emerald-400' : 'text-slate-500'}`} />
+            <span className="text-[11px] text-slate-300 truncate">
+              میکروفون همیشه باز باشد <span className="text-slate-500">(بدون نگه‌داشتن M)</span>
+            </span>
+          </span>
+          <span className="relative inline-flex shrink-0">
+            <input
+              type="checkbox"
+              checked={isOpenMic}
+              onChange={() => onToggleOpenMic?.()}
+              className="sr-only peer"
+            />
+            <span className="w-9 h-5 rounded-full bg-slate-700 peer-checked:bg-emerald-500/80 transition-colors" />
+            <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform peer-checked:translate-x-4" />
+          </span>
+        </label>
+
+        {/* Browsers refuse to start audio before the page is interacted with. */}
+        {isVoiceBlocked && (
+          <button
+            onClick={() => onResumeVoice?.()}
+            className="mb-3.5 w-full px-2.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-[11px] text-amber-300 font-semibold hover:bg-amber-500/25 transition-colors"
+          >
+            مرورگر پخش صدا را مسدود کرده است — برای شنیدن صدای بقیه کلیک کنید
+          </button>
+        )}
 
         {/* Participants List */}
         <div className="space-y-2 max-h-[190px] overflow-y-auto pr-1 select-none scrollbar-thin">
