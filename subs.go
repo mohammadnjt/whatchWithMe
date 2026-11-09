@@ -476,6 +476,12 @@ func langLabel(lang string) string {
 
 // looksPersian reports whether cue text is mostly Perso-Arabic script. It names a
 // track whose language tag is missing, which is common in scene releases.
+//
+// The comparison is relative rather than a fixed minimum: a short subtitle is
+// still unambiguous, and requiring a large absolute count mislabelled files with
+// only a few cues. The small floor rejects a file with no real text at all, and
+// the handful of Latin letters in the "WEBVTT" header cannot outweigh genuine
+// dialogue.
 func looksPersian(vtt []byte) bool {
 	persian, latin := 0, 0
 	for _, r := range string(vtt) {
@@ -486,7 +492,7 @@ func looksPersian(vtt []byte) bool {
 			latin++
 		}
 	}
-	return persian > 40 && persian > latin
+	return persian >= 4 && persian > latin
 }
 
 // ---------------------------------------------------------------------------

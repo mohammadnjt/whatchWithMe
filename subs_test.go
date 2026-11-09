@@ -144,6 +144,16 @@ func TestLooksPersian(t *testing.T) {
 	if looksPersian(en) {
 		t.Error("English text misdetected as Persian")
 	}
+	// A subtitle with only a cue or two is still unambiguous, and the Latin
+	// letters of the WEBVTT header must not tip the balance.
+	short := []byte("WEBVTT\n\n00:00:05.000 --> 00:00:08.000\nمتن آزمایشی\n")
+	if !looksPersian(short) {
+		t.Error("short Persian subtitle not detected")
+	}
+	// Nothing to judge: neither script present.
+	if looksPersian([]byte("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n...\n")) {
+		t.Error("text with no Persian detected as Persian")
+	}
 }
 
 func TestNormalizeLang(t *testing.T) {
