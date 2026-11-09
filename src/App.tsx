@@ -139,6 +139,8 @@ export default function App() {
     isLocalSpeaking,
     isOpenMic,
     isVoiceBlocked,
+    voiceStats,
+    duplicateSession,
     speakingUserIds,
     locallyMutedUserIds,
     toggleMic,
@@ -445,6 +447,8 @@ export default function App() {
               isLocalSpeaking={isLocalSpeaking}
               isOpenMic={isOpenMic}
               isVoiceBlocked={isVoiceBlocked}
+              voiceStats={voiceStats}
+              duplicateSession={duplicateSession}
               speakingUserIds={speakingUserIds}
               locallyMutedUserIds={locallyMutedUserIds}
               onToggleMic={toggleMic}

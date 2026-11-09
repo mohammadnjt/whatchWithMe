@@ -470,4 +470,22 @@ func (s *Server) handleJoin(c *Client, msg map[string]any) {
 
 	s.broadcastRoom(roomID, map[string]any{"type": "room:participants_updated", "participants": room.Participants}, nil)
 	s.broadcastRoom(roomID, map[string]any{"type": "room:notification", "text": name + " joined the room", "variant": "info"}, c)
+
+	// Identity comes from the session, so signing in twice (a second tab, or
+	// another device on the same account) produces one participant, not two.
+	// Voice cannot work between them: each end would have to address itself.
+	// Say so, because otherwise the microphone lights up and nothing is heard.
+	others := 0
+	for other := range s.clients {
+		if other != c && other.joined && other.roomID == roomID && other.userID == userID {
+			others++
+		}
+	}
+	if others > 0 {
+		c.enqueue(marshal(map[string]any{
+			"type":      "room:duplicate_session",
+			"text":      "این حساب کاربری همین حالا در جای دیگری هم باز است. چون هویت از روی حساب تعیین می‌شود، این دو یک عضو شمرده می‌شوند و گفتگوی صوتی بینشان برقرار نمی‌شود. برای تست صدا از دو حساب کاربری جدا استفاده کنید.",
+			"sessions":  others + 1,
+		}))
+	}
 }

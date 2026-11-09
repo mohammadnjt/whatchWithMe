@@ -33,6 +33,10 @@ interface MovieSidebarProps {
   isPushToTalkActive?: boolean;
   isOpenMic?: boolean;
   isVoiceBlocked?: boolean;
+  /** How the voice mesh is doing, so a silent failure becomes visible. */
+  voiceStats?: { peers: number; connected: number; connecting: number; failed: number };
+  /** Set when this account is signed in twice, which voice cannot bridge. */
+  duplicateSession?: string | null;
   isLocalSpeaking?: boolean;
   speakingUserIds?: Set<string>;
   locallyMutedUserIds?: Set<string>;
@@ -59,6 +63,8 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
   isPushToTalkActive = false,
   isOpenMic = false,
   isVoiceBlocked = false,
+  voiceStats,
+  duplicateSession = null,
   isLocalSpeaking = false,
   speakingUserIds = new Set(),
   locallyMutedUserIds = new Set(),
@@ -316,6 +322,35 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
             <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform peer-checked:translate-x-4" />
           </span>
         </label>
+
+        {/* The same account open twice is one participant, so voice has nobody
+            to reach. Without saying so, the mic just looks broken. */}
+        {duplicateSession && (
+          <div className="mb-3.5 px-2.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-[11px] text-amber-300 leading-relaxed">
+            {duplicateSession}
+          </div>
+        )}
+
+        {/* Why the microphone is not being heard, when it is not being heard. */}
+        {isMicActive && !duplicateSession && voiceStats && (
+          <div className="mb-3.5 px-2.5 py-2 rounded-xl bg-[#0b0e1d] border border-slate-800/90 text-[11px] leading-relaxed">
+            {voiceStats.peers === 0 ? (
+              <span className="text-slate-400">
+                کسی برای شنیدن نیست — تنها عضو آنلاین این اتاق شما هستید.
+              </span>
+            ) : voiceStats.connected > 0 ? (
+              <span className="text-emerald-400">
+                صدا به {voiceStats.connected} نفر وصل است.
+              </span>
+            ) : voiceStats.failed > 0 ? (
+              <span className="text-amber-400">
+                اتصال صدا برقرار نشد ({voiceStats.failed} نفر). معمولاً یعنی شبکه اجازه نمی‌دهد.
+              </span>
+            ) : (
+              <span className="text-slate-400">در حال اتصال صدا…</span>
+            )}
+          </div>
+        )}
 
         {/* Browsers refuse to start audio before the page is interacted with. */}
         {isVoiceBlocked && (

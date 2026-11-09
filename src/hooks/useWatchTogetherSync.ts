@@ -86,6 +86,12 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
   });
   // Set when the browser refuses to autoplay incoming voice until the page is clicked.
   const [isVoiceBlocked, setIsVoiceBlocked] = useState<boolean>(false);
+  // Connection state per voice peer, so a failure to connect is visible instead
+  // of looking exactly like a working microphone that nobody can hear.
+  const [voicePeerStates, setVoicePeerStates] = useState<Record<string, RTCPeerConnectionState>>({});
+  // Set when this account is signed in more than once: those sessions are one
+  // participant and cannot carry voice between them.
+  const [duplicateSession, setDuplicateSession] = useState<string | null>(null);
 
   const isMicActiveRef = useRef<boolean>(false);
   const isPTTHeldRef = useRef<boolean>(false);
@@ -319,6 +325,12 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
               return;
             }
 
+            // This account is open more than once, so voice has no second party.
+            if (data.type === 'room:duplicate_session') {
+              setDuplicateSession(data.text);
+              return;
+            }
+
             if (data.type === 'admin:new_pending_user') {
               if (userRef.current?.role === 'admin') {
                 showToast(`کاربر جدید "${data.user.displayName}" درخواست ورود دارد.`, 'info');
@@ -488,12 +500,19 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
       peer.pc.ontrack = null;
       peer.pc.onicecandidate = null;
       peer.pc.onnegotiationneeded = null;
+      peer.pc.onconnectionstatechange = null;
       peer.pc.close();
     } catch {
       // already closed
     }
     peer.audio.srcObject = null;
     peer.audio.remove();
+    setVoicePeerStates((prev) => {
+      if (!(peerId in prev)) return prev;
+      const next = { ...prev };
+      delete next[peerId];
+      return next;
+    });
   }, []);
 
   /**
@@ -516,6 +535,11 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     audio.autoplay = true;
     audio.muted = locallyMutedUserIdsRef.current.has(peerId);
     (audio as any).playsInline = true;
+    // Kept in the document: a detached element is an unreliable sink for a
+    // remote WebRTC stream, and it stays hidden either way.
+    audio.style.display = 'none';
+    audio.dataset.voicePeer = peerId;
+    document.body.appendChild(audio);
 
     const peer: PeerConn = {
       pc,
@@ -562,6 +586,10 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
         () => setIsVoiceBlocked(false),
         () => setIsVoiceBlocked(true)
       );
+    };
+
+    pc.onconnectionstatechange = () => {
+      setVoicePeerStates((prev) => ({ ...prev, [peerId]: pc.connectionState }));
     };
 
     pc.oniceconnectionstatechange = () => {
@@ -960,6 +988,20 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     };
   }, [stopMicrophone]);
 
+  // A plain summary of the voice mesh, so the UI can tell "nobody to talk to"
+  // apart from "connecting" and from "the connection failed" — three situations
+  // that otherwise all look like a microphone that works but is never heard.
+  const voiceStats = (() => {
+    const states = Object.values(voicePeerStates);
+    const peers = Math.max(states.length, peersRef.current.size);
+    return {
+      peers,
+      connected: states.filter((st) => st === 'connected').length,
+      connecting: states.filter((st) => st === 'new' || st === 'connecting').length,
+      failed: states.filter((st) => st === 'failed' || st === 'disconnected').length,
+    };
+  })();
+
   /** Removes one message banner early, when the reader dismisses it. */
   const dismissChatNotification = useCallback((id: string) => {
     setChatNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -1092,6 +1134,8 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     isLocalSpeaking,
     isOpenMic,
     isVoiceBlocked,
+    voiceStats,
+    duplicateSession,
     speakingUserIds,
     locallyMutedUserIds,
     toggleMic,
