@@ -16,6 +16,17 @@ interface UseWatchTogetherSyncOptions {
 /** Remembers the mic preference across reloads and rooms. */
 const OPEN_MIC_KEY = 'watchtogether_open_mic';
 
+/** How long an incoming-message banner stays on screen. */
+const CHAT_NOTIFICATION_MS = 6000;
+
+/** A banner for a message someone else just sent. */
+export interface ChatNotification {
+  id: string;
+  senderName: string;
+  avatar: string;
+  text: string;
+}
+
 /**
  * One peer in the voice mesh.
  *
@@ -44,6 +55,9 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [toastNotification, setToastNotification] = useState<{ text: string; variant?: string } | null>(null);
+  // Banners for messages from other people, newest last. Kept separate from the
+  // generic toast so several can stack and each can show who sent it.
+  const [chatNotifications, setChatNotifications] = useState<ChatNotification[]>([]);
 
   // Live Voice Chat States
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
@@ -256,6 +270,22 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
 
             if (data.type === 'chat:new_message') {
               setChatMessages((prev) => [...prev, data.message]);
+              // Announce it to everyone but the author, who already saw it.
+              const msg = data.message;
+              if (msg && msg.senderId !== myIdRef.current && !msg.isSystem) {
+                setChatNotifications((prev) => [
+                  ...prev.slice(-2), // keep the stack short
+                  {
+                    id: msg.id,
+                    senderName: msg.senderName,
+                    avatar: msg.avatar,
+                    text: msg.text,
+                  },
+                ]);
+                setTimeout(() => {
+                  setChatNotifications((prev) => prev.filter((n) => n.id !== msg.id));
+                }, CHAT_NOTIFICATION_MS);
+              }
               return;
             }
 
@@ -911,6 +941,11 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     };
   }, [stopMicrophone]);
 
+  /** Removes one message banner early, when the reader dismisses it. */
+  const dismissChatNotification = useCallback((id: string) => {
+    setChatNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
   /**
    * Retries playback of every peer's audio. Browsers refuse to start audio
    * before the page has been interacted with, so this is called from a click.
@@ -1030,6 +1065,8 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     isConnected,
     videoRef,
     toastNotification,
+    chatNotifications,
+    dismissChatNotification,
     isMicActive,
     isPushToTalkActive,
     isLocalSpeaking,

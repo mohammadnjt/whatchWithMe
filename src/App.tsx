@@ -131,6 +131,8 @@ export default function App() {
     isConnected,
     videoRef,
     toastNotification: syncToast,
+    chatNotifications,
+    dismissChatNotification,
     isMicActive,
     isPushToTalkActive,
     isLocalSpeaking,
@@ -382,6 +384,9 @@ export default function App() {
               onSaveMovie={updateMovie}
               onOpenChangeMovie={() => setIsChangeMovieOpen(true)}
               showToast={showSyncToast}
+              onSendChatMessage={sendChatMessage}
+              chatNotifications={chatNotifications}
+              onDismissChatNotification={dismissChatNotification}
             />
 
             {/* Bottom 3 Cards + Audio Visualizer (Desktop view) */}

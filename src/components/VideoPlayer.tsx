@@ -24,9 +24,11 @@ import {
   Copy,
   ShieldAlert,
   Trash2,
+  MessageSquare,
 } from 'lucide-react';
 import { formatTime } from '../utils/formatTime';
 import { MovieInfo } from '../types';
+import type { ChatNotification } from '../hooks/useWatchTogetherSync';
 
 interface VideoErrorInfo {
   code: number;
@@ -49,6 +51,12 @@ interface SubtitleTrackInfo {
   uploadedAt: number;
 }
 
+/**
+ * Row the subtitles sit on, counted up from the bottom of the video. Cues
+ * default to the very bottom, where the control bar covers them.
+ */
+const SUBTITLE_LINE = -4;
+
 interface ExtractionState {
   status: 'running' | 'done' | 'error';
   message?: string;
@@ -70,6 +78,11 @@ interface VideoPlayerProps {
   onSaveMovie?: (movie: Partial<MovieInfo>) => void;
   onOpenChangeMovie?: () => void;
   showToast: (text: string, variant?: string) => void;
+  /** Sends a chat message from the quick composer opened with "c". */
+  onSendChatMessage?: (text: string) => void;
+  /** Banners for messages other people just sent. */
+  chatNotifications?: ChatNotification[];
+  onDismissChatNotification?: (id: string) => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -85,6 +98,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onSaveMovie,
   onOpenChangeMovie,
   showToast,
+  onSendChatMessage,
+  chatNotifications = [],
+  onDismissChatNotification,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -112,6 +128,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [subUrlInput, setSubUrlInput] = useState('');
   const [showSubUrlInput, setShowSubUrlInput] = useState(false);
   const subFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Quick chat composer, opened with "c". It lives inside the player container
+  // so that it also works in fullscreen, where anything outside is not rendered.
+  const [showQuickChat, setShowQuickChat] = useState(false);
+  const [quickChatText, setQuickChatText] = useState('');
+  const quickChatInputRef = useRef<HTMLInputElement>(null);
 
   // Video error & connection state
   const [videoError, setVideoError] = useState<VideoErrorInfo | null>(null);
@@ -608,6 +630,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [extraction?.status, loadSubtitles]);
 
   /**
+   * Lifts subtitle cues clear of the control bar.
+   *
+   * ::cue cannot position a cue, so the line is set on the cues themselves: a
+   * negative `line` counts rows up from the bottom of the video, where cues sit
+   * by default and would otherwise be hidden behind the controls.
+   */
+  const raiseCues = useCallback((track: TextTrack) => {
+    const cues = track.cues;
+    if (!cues) return;
+    for (let i = 0; i < cues.length; i++) {
+      const cue = cues[i] as VTTCue;
+      // Leave cues alone if the file positioned them deliberately.
+      if (cue.line === 'auto' || cue.line === undefined) {
+        cue.snapToLines = true;
+        cue.line = SUBTITLE_LINE;
+      }
+    }
+  }, []);
+
+  /**
    * Shows exactly one track, or none.
    *
    * The <track> elements are rendered declaratively but their display is
@@ -622,14 +664,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const apply = () => {
       for (let i = 0; i < video.textTracks.length; i++) {
         const tt = video.textTracks[i];
-        tt.mode = tt.id && tt.id === activeSubId ? 'showing' : 'disabled';
+        const active = Boolean(tt.id) && tt.id === activeSubId;
+        tt.mode = active ? 'showing' : 'disabled';
+        if (active) {
+          // Cues load asynchronously: reposition the ones already parsed, and
+          // catch the rest as they arrive.
+          raiseCues(tt);
+          tt.removeEventListener('cuechange', onCueChange);
+          tt.addEventListener('cuechange', onCueChange);
+        }
       }
     };
+    function onCueChange(this: TextTrack) {
+      raiseCues(this);
+    }
+
     apply();
     // A track element added in the same render may not be in textTracks yet.
     video.textTracks.addEventListener('addtrack', apply);
-    return () => video.textTracks.removeEventListener('addtrack', apply);
-  }, [activeSubId, subTracks, videoRef]);
+    return () => {
+      video.textTracks.removeEventListener('addtrack', apply);
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].removeEventListener('cuechange', onCueChange);
+      }
+    };
+  }, [activeSubId, subTracks, videoRef, raiseCues]);
 
   const selectSubtitle = (id: string | null) => {
     setActiveSubId(id);
@@ -737,6 +796,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       showToast('حذف زیرنویس ناموفق بود.', 'warning');
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // Quick chat composer ("c")
+  // ---------------------------------------------------------------------------
+
+  const openQuickChat = useCallback(() => {
+    setShowQuickChat(true);
+    // The input mounts in the same tick, so focus on the next frame.
+    requestAnimationFrame(() => quickChatInputRef.current?.focus());
+  }, []);
+
+  const closeQuickChat = useCallback(() => {
+    setShowQuickChat(false);
+    setQuickChatText('');
+  }, []);
+
+  const submitQuickChat = () => {
+    const text = quickChatText.trim();
+    if (text) onSendChatMessage?.(text);
+    closeQuickChat();
+  };
+
+  useEffect(() => {
+    if (!videoUrl) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Never hijack a key the user is typing into a field.
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.isContentEditable ||
+          t.getAttribute('role') === 'textbox')
+      ) {
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return; // leave copy/shortcuts alone
+
+      if (e.key === 'c' || e.key === 'C' || e.code === 'KeyC') {
+        e.preventDefault();
+        openQuickChat();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [videoUrl, openQuickChat]);
+
+  // ---------------------------------------------------------------------------
+  // Subtitle placement
+  // ---------------------------------------------------------------------------
 
   const progressPercent = localDuration > 0 ? (localCurrentTime / localDuration) * 100 : 0;
 
@@ -910,6 +1021,76 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           />
         ))}
       </video>
+
+      {/* Quick chat composer, opened with "c". Top-right so it stays clear of
+          the subtitles and the control bar. */}
+      {showQuickChat && (
+        <div className="absolute top-3 right-3 z-40 w-[min(22rem,calc(100%-1.5rem))]">
+          <form
+            dir="rtl"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitQuickChat();
+            }}
+            className="flex items-center gap-2 bg-[#0c1020]/95 backdrop-blur-md border border-purple-500/50 rounded-xl p-2 shadow-2xl shadow-purple-950/40"
+          >
+            <MessageSquare className="w-4 h-4 text-purple-400 shrink-0 ms-1" />
+            <input
+              ref={quickChatInputRef}
+              value={quickChatText}
+              onChange={(e) => setQuickChatText(e.target.value)}
+              onKeyDown={(e) => {
+                // Stop these reaching the player's own shortcuts.
+                e.stopPropagation();
+                if (e.key === 'Escape') closeQuickChat();
+              }}
+              onBlur={() => {
+                if (!quickChatText.trim()) closeQuickChat();
+              }}
+              placeholder="پیام بفرست… (Esc برای بستن)"
+              className="flex-1 min-w-0 bg-transparent text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!quickChatText.trim()}
+              className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold disabled:opacity-40 shrink-0 transition-colors"
+            >
+              ارسال
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Incoming messages from other people. */}
+      {chatNotifications.length > 0 && (
+        <div
+          className={`absolute left-3 right-3 z-30 flex flex-col items-center gap-1.5 pointer-events-none ${
+            showQuickChat ? 'top-16' : 'top-3'
+          }`}
+        >
+          {chatNotifications.map((n) => (
+            <button
+              key={n.id}
+              dir="rtl"
+              onClick={() => onDismissChatNotification?.(n.id)}
+              className="pointer-events-auto max-w-[min(28rem,100%)] flex items-start gap-2 px-3 py-2 rounded-xl bg-[#151930]/95 backdrop-blur-md border border-purple-500/40 shadow-2xl shadow-purple-950/40 text-right hover:border-purple-400/70 transition-colors"
+              title="برای بستن کلیک کنید"
+            >
+              <span className="w-6 h-6 shrink-0 rounded-full bg-purple-600/30 border border-purple-500/40 text-purple-200 text-[10px] font-bold flex items-center justify-center">
+                {n.avatar}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[11px] font-bold text-purple-300 leading-tight">
+                  {n.senderName}
+                </span>
+                <span className="block text-xs text-slate-100 leading-snug break-words">
+                  {n.text}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Buffering Indicator */}
       {isBuffering && !videoError && (
