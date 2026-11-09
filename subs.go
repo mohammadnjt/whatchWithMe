@@ -116,8 +116,39 @@ func (s *Server) tracksFor(videoURL string) []*SubtitleTrack {
 	return out
 }
 
+// actorIDOf returns the id of the logged-in user behind a request, "" if none.
+func actorIDOf(r *http.Request) string {
+	if sess := sessionOf(r); sess != nil {
+		return sess.UserID
+	}
+	return ""
+}
+
+// notifySubtitlesChanged tells everyone currently watching videoURL that its
+// subtitle list changed, so their player can pick a new track up without a
+// reload. actorID identifies whoever caused it, letting their own client skip
+// the announcement for something it just did itself. Caller holds mu.
+func (s *Server) notifySubtitlesChanged(videoURL, actorID, action string) {
+	payload := marshal(map[string]any{
+		"type": "subtitles:updated", "videoUrl": videoURL, "by": actorID, "action": action,
+	})
+	for c := range s.clients {
+		if !c.joined {
+			continue
+		}
+		room := s.rooms[c.roomID]
+		if room == nil {
+			continue
+		}
+		// Subtitles belong to a video, not a room, so match on what is playing.
+		if v, _ := room.Movie["videoUrl"].(string); v == videoURL {
+			c.enqueue(payload)
+		}
+	}
+}
+
 // addTrack stores a converted WebVTT body and indexes it. Caller must not hold mu.
-func (s *Server) addTrack(videoURL, label, lang, source string, vtt []byte) (*SubtitleTrack, error) {
+func (s *Server) addTrack(videoURL, label, lang, source, actorID string, vtt []byte) (*SubtitleTrack, error) {
 	filename := fmt.Sprintf("sub-%d-%d.vtt", nowMs(), rand.IntN(1e9))
 	if err := os.WriteFile(filepath.Join(s.subtitleDir, filename), vtt, 0o644); err != nil {
 		return nil, err
@@ -130,6 +161,7 @@ func (s *Server) addTrack(videoURL, label, lang, source string, vtt []byte) (*Su
 	s.mu.Lock()
 	s.subtitles = append(s.subtitles, t)
 	s.saveSubtitles()
+	s.notifySubtitlesChanged(videoURL, actorID, "added")
 	s.mu.Unlock()
 	return t, nil
 }
@@ -579,7 +611,7 @@ func (s *Server) handleUploadSubtitle(w http.ResponseWriter, r *http.Request) {
 		label = langLabel(lang)
 	}
 
-	t, err := s.addTrack(videoURL, label, lang, "upload", vtt)
+	t, err := s.addTrack(videoURL, label, lang, "upload", actorIDOf(r), vtt)
 	if err != nil {
 		logErr.Printf("[Subs] Cannot store an uploaded subtitle: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "ذخیره زیرنویس روی سرور ناموفق بود."})
@@ -645,7 +677,7 @@ func (s *Server) handleSubtitleFromURL(w http.ResponseWriter, r *http.Request) {
 		label = langLabel(lang)
 	}
 
-	t, err := s.addTrack(videoURL, label, lang, "url", vtt)
+	t, err := s.addTrack(videoURL, label, lang, "url", actorIDOf(r), vtt)
 	if err != nil {
 		logErr.Printf("[Subs] Cannot store a downloaded subtitle: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "ذخیره زیرنویس روی سرور ناموفق بود."})
@@ -685,6 +717,10 @@ func (s *Server) handleDeleteSubtitle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "این زیرنویس پیدا نشد."})
 		return
 	}
+	// Everyone watching should drop the track too, not keep a dead <track> around.
+	s.mu.Lock()
+	s.notifySubtitlesChanged(removed.VideoURL, actorIDOf(r), "removed")
+	s.mu.Unlock()
 	if err := os.Remove(filepath.Join(s.subtitleDir, removed.Filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logErr.Printf("[Subs] Cannot delete %s: %v", removed.Filename, err)
 	}
@@ -838,13 +874,13 @@ func (s *Server) handleExtractSubtitles(w http.ResponseWriter, r *http.Request) 
 
 	// Reading a whole remote video takes minutes, so the request returns at once
 	// and the UI polls GET /api/subtitles for progress.
-	go s.runExtraction(videoURL, input)
+	go s.runExtraction(videoURL, input, actorIDOf(r))
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"extraction": job})
 }
 
 // runExtraction probes the video and converts each text track it finds.
-func (s *Server) runExtraction(videoURL, input string) {
+func (s *Server) runExtraction(videoURL, input, actorID string) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			s.finishExtraction(videoURL, func(j *extractJob) {
@@ -909,7 +945,7 @@ func (s *Server) runExtraction(videoURL, input string) {
 			label += " (Forced)"
 		}
 
-		if _, err := s.addTrack(videoURL, label, lang, "embedded", vtt); err != nil {
+		if _, err := s.addTrack(videoURL, label, lang, "embedded", actorID, vtt); err != nil {
 			logErr.Printf("[Subs] Cannot store extracted subtitle: %v", err)
 			skipped = append(skipped, subtitleStreamName(st, n))
 			continue

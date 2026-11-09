@@ -58,6 +58,9 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
   // Banners for messages from other people, newest last. Kept separate from the
   // generic toast so several can stack and each can show who sent it.
   const [chatNotifications, setChatNotifications] = useState<ChatNotification[]>([]);
+  // Bumped whenever the subtitle list of the current video changes anywhere, so
+  // the player can refetch it. Subtitles live on the server, not in room state.
+  const [subtitlesVersion, setSubtitlesVersion] = useState<number>(0);
 
   // Live Voice Chat States
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
@@ -320,6 +323,22 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
               if (userRef.current?.role === 'admin') {
                 showToast(`کاربر جدید "${data.user.displayName}" درخواست ورود دارد.`, 'info');
                 onNewPendingUserRef.current?.(data.user);
+              }
+              return;
+            }
+
+            // Someone added or removed a subtitle for the video being watched.
+            // Bumping the counter makes the player refetch its track list, so a
+            // new subtitle appears without anyone having to reload.
+            if (data.type === 'subtitles:updated') {
+              setSubtitlesVersion((v) => v + 1);
+              if (data.by && data.by !== myIdRef.current) {
+                showToast(
+                  data.action === 'removed'
+                    ? 'یک زیرنویس حذف شد.'
+                    : 'زیرنویس جدیدی برای این ویدیو اضافه شد.',
+                  'info'
+                );
               }
               return;
             }
@@ -1067,6 +1086,7 @@ export function useWatchTogetherSync({ roomId, user, onNewPendingUser }: UseWatc
     toastNotification,
     chatNotifications,
     dismissChatNotification,
+    subtitlesVersion,
     isMicActive,
     isPushToTalkActive,
     isLocalSpeaking,

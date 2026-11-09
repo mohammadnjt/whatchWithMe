@@ -83,6 +83,8 @@ interface VideoPlayerProps {
   /** Banners for messages other people just sent. */
   chatNotifications?: ChatNotification[];
   onDismissChatNotification?: (id: string) => void;
+  /** Changes when the subtitle list of this video changed on the server. */
+  subtitlesVersion?: number;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -101,6 +103,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onSendChatMessage,
   chatNotifications = [],
   onDismissChatNotification,
+  subtitlesVersion = 0,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -616,11 +619,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [videoUrl]);
 
-  // Reload the track list whenever the room switches to another video.
+  // A different video starts with nothing selected and its own track list.
   useEffect(() => {
     setActiveSubId(null);
     loadSubtitles();
   }, [loadSubtitles]);
+
+  // Someone else added or removed a subtitle for this video. Refetch, but leave
+  // the viewer's current selection alone — this is not a video change.
+  const handledSubVersionRef = useRef(subtitlesVersion);
+  useEffect(() => {
+    if (subtitlesVersion === handledSubVersionRef.current) return;
+    handledSubVersionRef.current = subtitlesVersion;
+    loadSubtitles();
+  }, [subtitlesVersion, loadSubtitles]);
+
+  // If the selected track was the one removed, fall back to off rather than
+  // pointing at a <track> that no longer exists.
+  useEffect(() => {
+    if (activeSubId && !subTracks.some((t) => t.id === activeSubId)) {
+      setActiveSubId(null);
+    }
+  }, [subTracks, activeSubId]);
 
   // While ffmpeg is reading the video, poll until it reports a result.
   useEffect(() => {

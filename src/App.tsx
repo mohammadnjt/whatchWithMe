@@ -133,6 +133,7 @@ export default function App() {
     toastNotification: syncToast,
     chatNotifications,
     dismissChatNotification,
+    subtitlesVersion,
     isMicActive,
     isPushToTalkActive,
     isLocalSpeaking,
@@ -387,6 +388,7 @@ export default function App() {
               onSendChatMessage={sendChatMessage}
               chatNotifications={chatNotifications}
               onDismissChatNotification={dismissChatNotification}
+              subtitlesVersion={subtitlesVersion}
             />
 
             {/* Bottom 3 Cards + Audio Visualizer (Desktop view) */}
