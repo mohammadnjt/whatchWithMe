@@ -17,7 +17,7 @@ import { HomeScreen } from './components/HomeScreen';
 import { AdminUsersModal } from './components/AdminUsersModal';
 import { useWatchTogetherSync } from './hooks/useWatchTogetherSync';
 import { MessageSquare, Users, Film, Radio, Sparkles, Loader2, Mic } from 'lucide-react';
-import { AuthUser } from './types';
+import { AuthUser, DEFAULT_QUALITY } from './types';
 
 export default function App() {
   // Authentication State
@@ -29,8 +29,9 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [isAdminUsersOpen, setIsAdminUsersOpen] = useState(false);
 
-  // User video stream quality preference (defaults to 720p as requested)
-  const [userQuality, setUserQuality] = useState('720p');
+  // Which rendition this viewer watches. Starts on the movie's own link, since
+  // whether any other quality exists depends on links having been entered.
+  const [userQuality, setUserQuality] = useState<string>(DEFAULT_QUALITY);
 
   // Debounced disconnect banner to prevent flickering during initial handshake
   const [showDisconnectBanner, setShowDisconnectBanner] = useState(false);
@@ -224,11 +225,37 @@ export default function App() {
     showToast(`کیفیت ویدیو روی ${newQuality} تنظیم شد.`, 'info');
   };
 
+  // Another film may not have a link for the rendition that was selected. Fall
+  // back to its own link so the menu never claims a quality that is not playing.
+  const roomQualities = room?.movie?.qualities;
+  useEffect(() => {
+    if (userQuality === DEFAULT_QUALITY) return;
+    const stillOffered = roomQualities?.some((q) => q.label === userQuality && q.url?.trim());
+    if (!stillOffered) setUserQuality(DEFAULT_QUALITY);
+  }, [roomQualities, userQuality]);
+
   // Active toast (either from sync or from app)
   const activeToast = appToast || syncToast;
 
   // Active movie for current room (null if room is newly created and no movie has been chosen yet)
   const currentMovie = room?.movie || null;
+
+  // The renditions this movie has a link for. videoUrl is the default one and is
+  // always offered, so a movie added before this existed still plays.
+  const availableQualities = currentMovie?.qualities?.filter((q) => q.url?.trim()) || [];
+
+  /**
+   * Which file this viewer actually plays.
+   *
+   * Quality is per viewer, not per room: everyone picks what their own
+   * connection can carry, and playback stays together because synchronisation
+   * works on timestamps rather than on bytes. Falls back to the movie's default
+   * link whenever the chosen rendition has no URL.
+   */
+  const activeVideoUrl =
+    availableQualities.find((q) => q.label === userQuality)?.url?.trim() ||
+    currentMovie?.videoUrl ||
+    '';
 
   // 1. Initial Auth Loading Screen
   if (isAuthChecking) {
@@ -376,7 +403,11 @@ export default function App() {
           <div className="flex-1 w-full min-w-0 flex flex-col">
             <VideoPlayer
               videoRef={videoRef}
-              videoUrl={currentMovie?.videoUrl || ''}
+              videoUrl={activeVideoUrl}
+              // The movie's own identity, which a quality switch does not change.
+              // It lets the player tell "another rendition of this film" from
+              // "a different film" and keep the playback position accordingly.
+              contentKey={currentMovie?.videoUrl || ''}
               posterUrl={currentMovie?.posterUrl || ''}
               title={currentMovie?.title || ''}
               isPlaying={room?.isPlaying || false}
@@ -441,6 +472,7 @@ export default function App() {
               participants={participants}
               currentUserId={syncUser.id}
               selectedQuality={userQuality}
+              availableQualities={availableQualities}
               chatMessages={chatMessages}
               isMicActive={isMicActive}
               isPushToTalkActive={isPushToTalkActive}

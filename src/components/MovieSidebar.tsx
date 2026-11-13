@@ -19,7 +19,14 @@ import {
   VolumeX,
   Radio,
 } from 'lucide-react';
-import { MovieInfo, Participant, ChatMessage } from '../types';
+import {
+  MovieInfo,
+  MovieQuality,
+  Participant,
+  ChatMessage,
+  QUALITY_LABELS,
+  DEFAULT_QUALITY,
+} from '../types';
 
 interface MovieSidebarProps {
   movie: MovieInfo;
@@ -28,6 +35,8 @@ interface MovieSidebarProps {
   participants: Participant[];
   currentUserId: string;
   selectedQuality: string;
+  /** Renditions this movie actually has a link for. */
+  availableQualities?: MovieQuality[];
   chatMessages: ChatMessage[];
   isMicActive?: boolean;
   isPushToTalkActive?: boolean;
@@ -58,6 +67,7 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
   participants,
   currentUserId,
   selectedQuality,
+  availableQualities = [],
   chatMessages,
   isMicActive = false,
   isPushToTalkActive = false,
@@ -125,7 +135,6 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
     setShowEmojiPicker(false);
   };
 
-  const qualities = ['4K Ultra HD', '1080p Full HD', '720p HD', '480p SD', '360p Data Saver', 'Auto Adaptive'];
 
   const formattedStartedTime = () => {
     if (scheduledTime) {
@@ -494,26 +503,60 @@ export const MovieSidebar: React.FC<MovieSidebarProps> = ({
                 <div className="px-2 py-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-800">
                   Select Stream Quality
                 </div>
-                {qualities.map((q) => {
-                  const shortLabel = q.split(' ')[0];
+                {/* The movie's own link, always playable. */}
+                <button
+                  onClick={() => {
+                    onQualityChange(DEFAULT_QUALITY);
+                    setQualityMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between ${
+                    selectedQuality === DEFAULT_QUALITY
+                      ? 'bg-purple-600/30 text-purple-300 font-bold'
+                      : 'text-slate-300 hover:bg-slate-800/70'
+                  }`}
+                >
+                  <span>{DEFAULT_QUALITY} (لینک اصلی)</span>
+                  {selectedQuality === DEFAULT_QUALITY && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                </button>
+
+                {/* A rendition is only selectable when a link exists for it:
+                    switching quality means switching file, not transcoding. */}
+                {QUALITY_LABELS.map((label) => {
+                  const has = availableQualities.some((q) => q.label === label);
+                  const isActive = selectedQuality === label && has;
                   return (
                     <button
-                      key={q}
+                      key={label}
+                      disabled={!has}
                       onClick={() => {
-                        onQualityChange(shortLabel);
+                        onQualityChange(label);
                         setQualityMenuOpen(false);
                       }}
+                      title={has ? undefined : 'برای این کیفیت لینکی ثبت نشده است'}
                       className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between ${
-                        selectedQuality === shortLabel
+                        isActive
                           ? 'bg-purple-600/30 text-purple-300 font-bold'
-                          : 'text-slate-300 hover:bg-slate-800/70'
+                          : has
+                          ? 'text-slate-300 hover:bg-slate-800/70'
+                          : 'text-slate-600 cursor-not-allowed'
                       }`}
                     >
-                      <span>{q}</span>
-                      {selectedQuality === shortLabel && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                      <span>{label}</span>
+                      {isActive ? (
+                        <Check className="w-3.5 h-3.5 text-purple-400" />
+                      ) : !has ? (
+                        <span className="text-[9px] text-slate-600">بدون لینک</span>
+                      ) : null}
                     </button>
                   );
                 })}
+
+                {availableQualities.length === 0 && (
+                  <div className="px-2 py-1.5 text-[10px] text-slate-500 leading-relaxed border-t border-slate-800 mt-1">
+                    برای این فیلم فقط یک لینک ثبت شده. از «تغییر فیلم» می‌توانید برای هر
+                    کیفیت لینک جدا اضافه کنید.
+                  </div>
+                )}
               </div>
             )}
           </div>

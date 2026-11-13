@@ -68,6 +68,12 @@ interface ExtractionState {
 interface VideoPlayerProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   videoUrl?: string;
+  /**
+   * Identifies the film independently of which rendition is playing. When this
+   * stays the same but videoUrl changes, the viewer switched quality and should
+   * carry on from where they were rather than restart.
+   */
+  contentKey?: string;
   posterUrl?: string;
   title?: string;
   isPlaying: boolean;
@@ -90,6 +96,7 @@ interface VideoPlayerProps {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoRef,
   videoUrl = '',
+  contentKey = '',
   posterUrl = '',
   title = '',
   isPlaying,
@@ -107,6 +114,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+
+  // Switching quality replaces the media source, which resets the element to
+  // the start. These remember where the viewer was so playback can continue
+  // from the same moment instead of jumping back to the beginning.
+  const lastTimeRef = useRef(0);
+  const lastContentKeyRef = useRef(contentKey);
+  const resumeAtRef = useRef<number | null>(null);
 
   const [localCurrentTime, setLocalCurrentTime] = useState(currentTime || 0);
   const [localDuration, setLocalDuration] = useState(duration || 8910);
@@ -255,6 +269,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [volume, isMuted, videoRef, videoUrl]);
 
+  /**
+   * Decides what a source change means.
+   *
+   * Same film, different URL is a quality switch, so the position is carried
+   * over. A different film starts from wherever the room is, so nothing is
+   * carried. Runs after the element already has the new src, which is why the
+   * old position comes from the ref rather than from the element.
+   */
+  useEffect(() => {
+    if (!videoUrl) return;
+    if (lastContentKeyRef.current === contentKey) {
+      resumeAtRef.current = lastTimeRef.current;
+    } else {
+      lastContentKeyRef.current = contentKey;
+      resumeAtRef.current = null;
+      lastTimeRef.current = 0;
+    }
+  }, [videoUrl, contentKey]);
+
   // Watchdog & state reset on videoUrl change
   useEffect(() => {
     setVideoError(null);
@@ -299,6 +332,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const handleTimeUpdate = () => {
       setLocalCurrentTime(video.currentTime);
+      // Kept in a ref as well: a quality switch needs the position immediately,
+      // before a state update would have been applied.
+      lastTimeRef.current = video.currentTime;
     };
 
     const handleLoadedMetadata = () => {
@@ -306,6 +342,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setVideoError(null);
       if (video.duration && !isNaN(video.duration) && video.duration > 0) {
         setLocalDuration(video.duration);
+      }
+
+      // Continue from where the previous rendition was. Renditions of the same
+      // film share a timeline, so the timestamp carries over directly.
+      const resumeAt = resumeAtRef.current;
+      resumeAtRef.current = null;
+      if (resumeAt !== null && resumeAt > 0.5) {
+        const limit = video.duration && !isNaN(video.duration) ? video.duration - 0.5 : resumeAt;
+        video.currentTime = Math.min(resumeAt, Math.max(0, limit));
+        if (isPlaying) video.play().catch(() => {});
       }
     };
 

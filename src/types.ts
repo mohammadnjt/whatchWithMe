@@ -1,7 +1,18 @@
 export interface MovieQuality {
-  label: string; // e.g. "4K", "1080p", "720p", "480p", "360p", "Auto"
+  label: string; // one of QUALITY_LABELS
   url?: string;
 }
+
+/**
+ * Renditions a movie can carry a separate link for, best first.
+ *
+ * There is no transcoding behind this: each entry is simply another file, so a
+ * quality can only be offered when a link for it has been entered. The label
+ * shown when a viewer is on the movie's own default link is DEFAULT_QUALITY.
+ */
+export const QUALITY_LABELS = ['4K', '1080p', '720p', '480p', '360p'] as const;
+
+export const DEFAULT_QUALITY = 'پیش‌فرض';
 
 export interface MovieInfo {
   title: string;

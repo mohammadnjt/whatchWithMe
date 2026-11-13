@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { X, Upload, Link2, Film, Check, AlertCircle, HardDrive, Loader2, Activity } from 'lucide-react';
-import { MovieInfo, StorageFileItem } from '../types';
+import { MovieInfo, MovieQuality, StorageFileItem, QUALITY_LABELS } from '../types';
 import { timeAgo } from '../utils/formatTime';
 
 interface ChangeMovieModalProps {
@@ -25,6 +25,26 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
   const [year, setYear] = useState(currentMovie.year || '2026');
   const [tagline, setTagline] = useState(currentMovie.tagline || '');
   const [posterUrl, setPosterUrl] = useState(currentMovie.posterUrl || '');
+
+  // One link per rendition. Switching quality switches file, so a rendition the
+  // viewer can pick has to have its own link entered here.
+  const [qualityUrls, setQualityUrls] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const q of currentMovie.qualities || []) {
+      if (q.label && q.url) initial[q.label] = q.url;
+    }
+    return initial;
+  });
+  const [showQualityLinks, setShowQualityLinks] = useState(
+    Boolean(currentMovie.qualities?.some((q) => q.url))
+  );
+
+  /** The qualities to persist: only the ones that were actually filled in. */
+  const collectQualities = (): MovieQuality[] =>
+    QUALITY_LABELS.filter((label) => qualityUrls[label]?.trim()).map((label) => ({
+      label,
+      url: qualityUrls[label].trim(),
+    }));
 
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -95,6 +115,7 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
       posterUrl:
         posterUrl.trim() ||
         'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop',
+      qualities: collectQualities(),
     });
     showToast('Movie source updated for everyone!', 'success');
     onClose();
@@ -137,6 +158,9 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
         posterUrl:
           posterUrl ||
           'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop',
+        // A different film: the previous film's per-quality links must not
+        // survive the merge, or picking a quality would play the old movie.
+        qualities: [],
       });
 
       showToast('Video uploaded and loaded for everyone!', 'success');
@@ -151,6 +175,7 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
         genre: 'Local Video',
         year: '2026',
         tagline: `Local file: ${file.name}`,
+        qualities: [],
       });
       showToast('Loaded video locally!', 'info');
       onClose();
@@ -167,6 +192,7 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
       year: new Date().getFullYear().toString(),
       tagline: '',
       posterUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=800&auto=format&fit=crop',
+      qualities: [],
     });
     showToast(`Loaded "${film.title}"`, 'success');
     onClose();
@@ -288,6 +314,58 @@ export const ChangeMovieModal: React.FC<ChangeMovieModalProps> = ({
                         ⚡ تبدیل به لینک استریم پروکسی سرور WatchTogether
                       </button>
                     )}
+                  </div>
+                )}
+              </div>
+
+              {/* Per-quality links. Each rendition is a separate file: there is
+                  no transcoding, so a quality is only offered once its own link
+                  is here. The main link above stays the default. */}
+              <div className="rounded-xl border border-slate-700/70 bg-[#0b0e1d]/60 p-3">
+                <button
+                  type="button"
+                  onClick={() => setShowQualityLinks(!showQualityLinks)}
+                  className="w-full flex items-center justify-between text-slate-300 font-semibold"
+                >
+                  <span className="flex items-center gap-2">
+                    <Film className="w-3.5 h-3.5 text-purple-400" />
+                    لینک جداگانه برای هر کیفیت
+                    {collectQualities().length > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-purple-600/30 border border-purple-500/40 text-purple-200 text-[10px] font-mono">
+                        {collectQualities().length}
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-slate-500 text-[11px]">
+                    {showQualityLinks ? 'بستن' : 'باز کردن'}
+                  </span>
+                </button>
+
+                {showQualityLinks && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      هر کیفیت یک فایل جداگانه است و ترنسکدی انجام نمی‌شود، پس هر کیفیتی
+                      که لینکش را بگذارید برای بیننده‌ها قابل انتخاب می‌شود و بقیه خاکستری
+                      می‌مانند. هر کس کیفیت خودش را جدا انتخاب می‌کند و همگام‌سازی به هم
+                      نمی‌خورد. خالی گذاشتن یک ردیف یعنی آن کیفیت ارائه نشود.
+                    </p>
+                    {QUALITY_LABELS.map((label) => (
+                      <div key={label} className="flex items-center gap-2">
+                        <span className="w-14 shrink-0 text-[11px] font-mono font-bold text-slate-400">
+                          {label}
+                        </span>
+                        <input
+                          type="url"
+                          dir="ltr"
+                          placeholder={`https://example.com/movie-${label}.mp4`}
+                          value={qualityUrls[label] || ''}
+                          onChange={(e) =>
+                            setQualityUrls((prev) => ({ ...prev, [label]: e.target.value }))
+                          }
+                          className="flex-1 min-w-0 bg-[#0c1020] border border-slate-700 rounded-lg px-2.5 py-1.5 text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-mono text-[11px]"
+                        />
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
